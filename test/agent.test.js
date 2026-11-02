@@ -1,0 +1,50 @@
+'use strict'
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const A = require('../agent')
+const { parseAIResult } = require('../ai')
+
+test('模型漏写的任务不会从清单消失', () => {
+  let l = A.mergeTasks([], A.parseTasks([{ text: '砍树' }, { text: '做箱子' }, { text: '放箱子' }]))
+  assert.deepEqual(l.map((t) => t.id), [1, 2, 3])
+  l = A.mergeTasks(l, A.parseTasks([{ id: 1, text: '随便改的字', status: 'done' }]))
+  assert.equal(l.length, 3)
+  assert.equal(l[0].text, '砍树')
+  assert.deepEqual(A.pending(l).map((t) => t.id), [2, 3])
+})
+test('模型自带的 id 不能抢占新任务编号', () => {
+  const l = A.mergeTasks([{ id: 1, text: 'a', status: 'todo' }], A.parseTasks([{ id: 99, text: 'b' }]))
+  assert.equal(l[1].id, 2)
+})
+test('清单有上限，非法状态按待做', () => {
+  const many = Array.from({ length: 30 }, (_, i) => ({ text: `t${i}`, status: 'x' }))
+  const l = A.mergeTasks([], A.parseTasks(many))
+  assert.equal(l.length, 16)
+  assert.equal(l[0].status, 'todo')
+})
+test('验收条件只接受固定形状', () => {
+  assert.deepEqual(A.parseVerify({ item: 'minecraft:oak_log', count: 8 }), { item: 'oak_log', count: 8 })
+  assert.deepEqual(A.parseVerify({ near: [1.5, 64, 2], r: 999 }), { near: [1, 64, 2], r: 64 })
+  assert.deepEqual(A.parseVerify({ placed: 'chest', at: [1, 2, 3] }), { placed: 'chest', at: [1, 2, 3] })
+  assert.deepEqual(A.parseVerify({ cleared: ['dirt'], r: 32, above: 76 }), { cleared: ['dirt'], r: 32, left: 0, above: 76 })
+  for (const bad of [null, 'x', {}, { item: 'a b' }, { near: [1, 2] }, { placed: 'chest' }, { cleared: ['A!'] }]) assert.equal(A.parseVerify(bad), undefined)
+})
+test('tasks 坏了不作废整轮动作', () => {
+  const r = parseAIResult(JSON.stringify({ understanding: '要木头', reply: '好', actions: [{ cmd: 'chop', args: [] }], done: false, tasks: 'x' }))
+  assert.equal(r.tasks, undefined)
+  assert.equal(r.understanding, '要木头')
+  assert.equal(r.actions.length, 1)
+})
+test('同样动作没变化才算空转', () => {
+  const s = A.stallTracker()
+  assert.equal(s(['find dirt'], false), 0)
+  assert.equal(s(['find dirt'], false), 1)
+  assert.equal(s(['find dirt'], true), 0)
+  assert.equal(s([], false), 0)
+  assert.equal(s([], false), 0)
+})
+test('忙时的话术识别', () => {
+  for (const t of ['算了', '停下！', '不用了']) assert.ok(A.CANCEL.test(t))
+  for (const t of ['算了先挖矿', '别停']) assert.ok(!A.CANCEL.test(t))
+  for (const t of ['你在干嘛', '做到哪了', '进度如何']) assert.ok(A.STATUS_QUESTION.test(t))
+})

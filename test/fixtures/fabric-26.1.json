@@ -1,0 +1,12 @@
+{
+  "captured_at": "2026-10-29",
+  "timezone": "Asia/Singapore",
+  "source": "Configured local Minecraft Fabric server; configuration-only probe, disconnected before play",
+  "minecraft_version": "26.1",
+  "bytes": 116879,
+  "sha256": "da341d6c31d34d041b073a6f5c220b45ccbfa007682b3083f8bcdcfdbfd1f3e8",
+  "registry_count": 12,
+  "item_count": 1971,
+  "block_count": 1563,
+  "component_count": 134
+}
