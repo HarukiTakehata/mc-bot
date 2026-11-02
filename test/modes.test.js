@@ -85,3 +85,14 @@ test('不可达掉落物不启动寻路，让位默认关闭且不在占用时�
   h.occupied(false); h.tick()
   assert.equal(h.goals.length, 1)
 })
+
+test('危险反射：有防火只躲岩浆；赶路途中踩过岩浆块不打断；静止踩岩浆块仍跑开', () => {
+  const at = (h, under, feet = 'air') => { h.bot.blockAt = (p) => ({ name: p.y < 64 ? under : feet, boundingBox: 'block' }) }
+  const escaped = (setup) => { const h = harness(); h.bot.registry = { effectsByName: { fire_resistance: { id: 12 } } }; h.bot.entity.effects = {}; setup(h); h.tick(); return h.goals.length > 0 }
+  assert.equal(escaped((h) => at(h, 'magma_block')), true)
+  assert.equal(escaped((h) => { at(h, 'magma_block'); h.moving(true) }), false)
+  assert.equal(escaped((h) => { at(h, 'stone'); h.bot.entity.onFire = true }), true)
+  assert.equal(escaped((h) => { at(h, 'stone'); h.bot.entity.onFire = true; h.bot.entity.effects[12] = { id: 12 } }), false)
+  assert.equal(escaped((h) => { at(h, 'magma_block', 'fire'); h.bot.entity.effects[12] = { id: 12 } }), false)
+  assert.equal(escaped((h) => { at(h, 'stone', 'lava'); h.bot.entity.effects[12] = { id: 12 } }), true)
+})

@@ -73,7 +73,7 @@ function harness({ ask = async () => ({ reply: '', actions: [], done: false }), 
   vm.runInContext(fs.readFileSync(path.join(root, 'bot.js'), 'utf8'), context, { filename: 'bot.js' })
   bot.emit('spawn')
   sent.length = 0
-  return { bot, sent, marks, calls, logs, engines, readGoal: () => vm.runInContext('goal', context) }
+  return { bot, sent, marks, calls, logs, engines, readGoal: () => vm.runInContext('goal', context), inner: (name) => vm.runInContext(name, context) }
 }
 
 test('真实聊天入口拒绝原型名、保护最终片段，之后合法玩家仍可控制', async () => {
@@ -237,4 +237,33 @@ test('玩家明确不要飞时，AI误给goto也保持步行偏好', async () =>
   await flush()
   const route = h.calls.find((c) => Array.isArray(c) && c[0] === 'travelTo')
   assert.equal(route[2].mode, 'walk')
+})
+
+test('私聊来的查询指令私聊回，公屏来的仍回公屏；私聊不能借回复发别的命令', async () => {
+  const h = harness()
+  h.bot.emit('whisper', 'Asker', 'pos')
+  await flush()
+  assert.ok(h.sent.length > 0 && h.sent.every((s) => s.startsWith('/msg Asker 我在')), h.sent.join(' | '))
+  h.sent.length = 0
+  h.bot.emit('chat', 'Asker', 'bot pos')
+  await flush()
+  assert.ok(h.sent.length > 0 && h.sent.every((s) => s.startsWith('我在')), h.sent.join(' | '))
+  h.sent.length = 0
+  h.bot.emit('whisper', 'Asker', 'say /op Asker')
+  await flush()
+  assert.ok(h.sent.every((s) => !s.startsWith('/')), h.sent.join(' | '))
+})
+
+test('水里：站在坑底可以挖出去，浮在深水里仍不许挖放', () => {
+  const h = harness()
+  const floatInWater = h.inner('floatInWater')
+  const water = { liquid: true, physical: false }, air = { liquid: false, physical: false }, dirt = { liquid: false, physical: true }
+  const make = (below) => {
+    const moves = { liquids: new Set(), getNeighbors: () => [{ x: 1, y: 63, z: 0, toBreak: [{}], toPlace: [] }, { x: 1, y: 62, z: 0, toBreak: [], toPlace: [] }],
+      getBlock: (_n, _dx, dy) => (dy === -1 ? below : dy === 0 ? water : air) }
+    floatInWater(moves)
+    return moves.getNeighbors({ x: 0, y: 62, z: 0 }).length
+  }
+  assert.equal(make(dirt), 2) // 1x1 水坑：出路要挖
+  assert.equal(make(water), 1) // 深水浮着：只留不用挖放的
 })

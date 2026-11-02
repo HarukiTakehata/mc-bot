@@ -213,3 +213,12 @@ test('excavate 只收限定的参数', () => {
   assert.deepEqual(normalizeAction('excavate', ['dirt,grass_block', 'r=32', 'above=76'], { ai: true }), { cmd: 'excavate', args: ['dirt,grass_block', 'r=32', 'above=76'] })
   for (const args of [[], ['dirt', 'r=33'], ['dirt', 'max=513'], ['dirt', 'r=0'], ['dirt', 'x=1'], ['dirt', 'r=1', 'r=2'], ['a,b,c,d,e,f,g']]) assert.throws(() => normalizeAction('excavate', args, { ai: true }), { code: 'INVALID_ACTION' })
 })
+
+test('长列表在逗号后分段，不把物品名和数量拆开；断开后的斜杠仍加前缀', () => {
+  const inv = Array.from({ length: 20 }, (_, i) => `netherite_item_${i}x${i + 1}`).join(', ')
+  const chunks = safeChatChunks(inv)
+  assert.ok(chunks.length > 1)
+  for (const chunk of chunks) assert.match(chunk, /^netherite_item_\d+x\d+(, netherite_item_\d+x\d+)*,?$/)
+  assert.equal(chunks.join(' ').replace(/,$/, ''), inv)
+  assert.equal(safeChatChunks('a'.repeat(175) + '  /opxxxxxxxxxx yy')[1].slice(0, 3), '·/o')
+})

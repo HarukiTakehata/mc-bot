@@ -96,12 +96,15 @@ function sendChat(chunk) {
   if (chatBacklog.length > CHAT_BACKLOG) console.log(`[chat] 说得太快，丢弃: ${chatBacklog.shift().slice(0, 40)}`)
   if (!chatTimer) { chatTimer = setTimeout(drainChat, CHAT_REFILL_MS); chatTimer.unref?.() }
 }
+// 私聊来的查询（背包、坐标、状态）私聊回：以前回在公屏，全服可见，还被 QQ 互通转发进群（正式服实测）
+const replyStore = new (require('node:async_hooks').AsyncLocalStorage)()
 const say = (msg) => {
   if (!runtime.isActive()) return
   const chunks = safeChatChunks(msg)
   const text = chunks.join(' ')
   sayLog?.push(text)
-  for (const chunk of chunks) sendChat(chunk)
+  const whisperTo = replyStore.getStore()
+  for (const chunk of chunks) sendChat(whisperTo ? `/msg ${whisperTo} ${chunk}` : chunk)
 }
 const fmt = (p) => `${p.x.toFixed(0)} ${p.y.toFixed(0)} ${p.z.toFixed(0)}`
 const sleepMs = runtime.delay
@@ -229,8 +232,9 @@ function floatInWater(moves) {
       const cell = moves.getBlock(m, 0, 0, 0), head = moves.getBlock(m, 0, 1, 0)
       return !(cell.liquid && (head.liquid || head.physical))
     })
-    // 水里挖和放都要踩稳，浮着永远等不到（实测：浅水竹子边上下漂到超时）
-    return here.liquid ? open.filter((m) => !m.toBreak.length && !m.toPlace.length) : open
+    // 水里挖和放都要踩稳，浮着永远等不到（实测：浅水竹子边上下漂到超时）。
+    // 脚下是实心地面就算踩稳：出生点旁 1x1 两格深的水坑，出路全要挖，一律禁掉后一步不动卡了 5 分钟（正式服拷贝实测）
+    return here.liquid && !moves.getBlock(node, 0, -1, 0).physical ? open.filter((m) => !m.toBreak.length && !m.toPlace.length) : open
   }
 }
 // 路线上的水下节点抬到水面：节点高差超过 1 格算没到，浮着的机器人够不着
@@ -518,7 +522,7 @@ async function mine(name, count) {
   const { got, error } = await mineIds(ids, count)
   if (!task) return
   if (error) say(error)
-  else say(got ? `挖完了，挖了 ${got} 个 ${name}` : `附近 32 格内找不到能走到的 ${name}`)
+  else say(got >= count ? `挖完了，挖了 ${got} 个 ${name}` : got ? `只挖到 ${got}/${count} 个 ${name}，其余够不着` : `附近 32 格内找不到能走到的 ${name}`)
 }
 // 挖一组方块中的 count 个（get 规划器也用这个），返回 { got, error }
 async function mineIds(ids, count, maxDistance = 32) {
@@ -528,6 +532,8 @@ async function mineIds(ids, count, maxDistance = 32) {
   const lava = bot.registry.blocksByName.lava?.id
   const nearLava = (p) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]]
     .some(([x, y, z]) => bot.blockAt(p.offset(x, y, z))?.type === lava)
+  // 水下挖慢 5 倍、浮着再慢 5 倍，木镐一块石头接近 30 秒，撞上单块超时（出生点水坑实测）：挨着水的放到最后再挖
+  const wet = (p) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]].some(([x, y, z]) => isWaterCell(bot.blockAt(p.offset(x, y, z))))
   const bad = new Set() // 日志：同一个够不着的方块会被反复选中直到 3 次失败，失败过的就跳过换下一个
   // 连锁采集类模组一次掉一堆（实测：chop 4 报 4，背包里 18 个原木）：能按物品名对上的以背包增量为准
   const names = new Set(ids.map((id) => bot.registry.blocks[id]?.name))
@@ -535,7 +541,8 @@ async function mineIds(ids, count, maxDistance = 32) {
   const before = carried()
   const gained = () => Math.max(got, carried() - before)
   while (runtime.isActive() && task && gained() < count && misses < 5) {
-    const pos = bot.findBlocks({ matching: ids, maxDistance, count: 24 }).find((p) => !nearLava(p) && !bad.has(p.toString()))
+    const candidates = bot.findBlocks({ matching: ids, maxDistance, count: 24 }).filter((p) => !nearLava(p) && !bad.has(p.toString()))
+    const pos = candidates.find((p) => !wet(p)) ?? candidates[0]
     if (!pos) break
     // 没有能采集的工具时 mineflayer-tool 会无限递归去箱子里找，必须提前拦下
     const target = bot.blockAt(pos)
@@ -548,6 +555,12 @@ async function mineIds(ids, count, maxDistance = 32) {
     } catch (err) {
       console.log(`[mine] ${err.name}: ${err.message}`)
       runtime.assertActive()
+      // collectblock 背包满了要往箱子倒，没给箱子就抛 NoChests；以前重试 5 次后报"找不到能走到的目标方块"，原因说错了
+      if (err.name === 'NoChests') {
+        await inventorySettled()
+        const n = gained()
+        return { got: n, error: `${n ? `挖了 ${n} 个后` : ''}背包满了，先 bot dump 存杂物或 bot drop 丢掉些再挖` }
+      }
       // 自卫打架会抢走寻路目标，等打完再继续；其他失败最多忍 5 次，这块够不着就换下一块
       if (combat.active()) await combat.waitOver()
       else { misses++; bad.add(pos.toString()) }
@@ -569,6 +582,9 @@ async function collectWithin(target) {
   const giveUp = new Promise((_, reject) => {
     const fail = (why) => {
       stuckHandler = null
+      // 放弃时留下现场：只有"N 秒没挖到"看不出是在算路、走不动还是挖得太慢
+      const me = bot.entity.position
+      console.log(`[collect] 放弃 ${target.name}@${fmt(target.position)} 距离${me.distanceTo(target.position).toFixed(1)} 我在${fmt(me)}${bot.entity.isInWater ? '(水里)' : ''}${bot.entity.onGround ? '' : '(悬空)'} 寻路${bot.pathfinder.isMoving() ? '在走' : bot.pathfinder.isMining?.() ? '在挖' : '停着'} 目标${bot.pathfinder.goal ? '有' : '无'} 在挖${bot.targetDigBlock ? bot.targetDigBlock.name : '无'}`)
       runtime.unscoped(() => { bot.collectBlock.cancelTask().catch(() => {}); bot.pathfinder.setGoal(null); bot.stopDigging() })
       const err = new Error(why)
       err.name = 'CollectGiveUp'
@@ -705,6 +721,8 @@ async function craftItem(name, count, depth) {
       await inventorySettled(600, 3000)
       station = table || findTable() || (depth < 3 ? await getTable(depth) : null)
       if (station) await travel(new goals.GoalNear(station.position.x, station.position.y, station.position.z, 2)).catch(() => {})
+      // 走不过去还去开工作台，会等 20 秒 windowOpen 超时，玩家只看到一句英文报错（正式服拷贝：水坑边做石镐）
+      if (station && bot.entity.position.distanceTo(station.position.offset(0.5, 0.5, 0.5)) > 4.5) return `够不着工作台（${fmt(station.position)}），走不过去`
       ready = bot.recipesFor(item.id, null, 1, station)[0]
       if (!ready) return '背包同步后材料不够了'
       await bot.craft(ready, Math.ceil(count / ready.result.count), station)
@@ -822,8 +840,9 @@ async function autoEat(force = false) {
     eating = false
   }
 }
-// 贴身肉搏时不吃：换手会放下武器，挨打还会打断进食（实测：吃东西超时，之后拿着牛肉打怪被打死）。血少了战斗循环会先撤退再吃
-bot.on('health', () => { if (!combat.meleeing()) autoEat(bot.health < 14) })
+// 战斗中不吃：换手会放下武器，挨打还会打断进食（实测：吃东西超时，之后拿着牛肉打怪被打死）。血少了战斗循环会先撤退再吃。
+// 撤退/逃跑也算战斗：正式服拷贝上夜里守点，被僵尸追着吃东西超时后被打死
+bot.on('health', () => { if (!combat.active()) autoEat(bot.health < 14) })
 
 // ---- 自卫（combat.js）：苦力怕、骷髅有专门打法；打完恢复跟随/站岗 ----
 let followTarget = null // 正在跟随的玩家，打完架恢复跟随
@@ -1267,7 +1286,10 @@ autoTravel = createAutoTravel(bot, {
   },
   arrived: (target, range) => {
     const goal = new goals.GoalNear(target.x, target.y, target.z, range)
-    return goal.isEnd(bot.entity.position.floored()) || bot.entity.position.distanceTo(new Vec3(Math.floor(target.x) + 0.5, Math.floor(target.y), Math.floor(target.z) + 0.5)) <= range + 0.5
+    const p = bot.entity.position, cx = Math.floor(target.x) + 0.5, cz = Math.floor(target.z) + 0.5
+    // 玩家给的 y 常差一格（站在水面、半砖、草径上）：水平到了、高差 1.5 格内也算到（正式服拷贝实测：差 1 格报"未到目标"）
+    return goal.isEnd(p.floored()) || p.distanceTo(new Vec3(cx, Math.floor(target.y), cz)) <= range + 0.5 ||
+      (Math.hypot(p.x - cx, p.z - cz) <= range + 0.5 && Math.abs(p.y - Math.floor(target.y)) <= 1.5)
   },
   fly: async (target, options) => {
     runtime.assertActive()
@@ -1332,7 +1354,7 @@ commands.status = () => {
   const traffic = autoTravel.status()
   const transport = traffic.active ? ({ SELECTING: '评估路线', WALKING: '步行', FLIGHT_REQUESTED: '鞘翅准备/飞行' }[traffic.phase] || '赶路中')
     : ({ walk: '步行', fly: '鞘翅', hybrid: '鞘翅和步行' }[traffic.last?.transport] || '无')
-  say(`任务: ${current ? `${current.name}${current.cancelling ? '（收尾中）' : ''}` : '空闲'}；交通:${transport}；飞行:${flight?.status()?.phase || 'IDLE'}；AI: ${ai ? JSON.stringify(stats) : '未配置'}；目标: ${goal?.label || goal?.text || '无'}`)
+  say(`任务: ${current ? `${current.name}${current.cancelling ? '（收尾中）' : ''}` : '空闲'}；交通:${transport}；飞行:${flight?.status()?.phase || 'IDLE'}；AI额度: ${ai ? `本分钟剩${stats.minute.remaining}/${stats.minute.limit}，本小时剩${stats.hour.remaining}/${stats.hour.limit}` : '未配置'}；目标: ${goal?.label || goal?.text || '无'}`)
 }
 
 // 玩家的“这里”“这个”：给 AI 说话人的坐标和他正看着的方块
@@ -1840,7 +1862,7 @@ const globalInputLimit = createRateLimiter({ limit: 80, windowMs: 60_000 })
 const limitNotice = createRateLimiter({ limit: 1, windowMs: 10_000 })
 const REPLANNABLE = new Set([...AI_ACTIONS].filter((c) => !['walk', 'plan', 'note', 'guard', 'stop', 'stay', 'follow', 'mark', 'inspect', 'tip', 'try', 'rs', 'rstrace', 'rsdiag', 'materials', 'blueprints'].includes(c)))
 const readCommands = new Set(['help', 'status', 'pos', 'hp', 'look', 'inv', 'places', 'scan', 'advice', 'lastdeath', 'plan', 'inspect', 'tip', 'rs', 'rstrace', 'rsdiag', 'materials', 'blueprints'])
-function handleChat(user, message) {
+function handleChat(user, message, { whisper = false } = {}) {
   Promise.resolve().then(() => {
     if (user === bot.username || typeof message !== 'string') return
     const m = message.trim().match(/^bot\s+(\S+)\s*(.*)$/i)
@@ -1878,6 +1900,7 @@ function handleChat(user, message) {
         return runtime.scope(() => instruct(user, message.trim().slice(4)))
       }
       if (stopping) return runtime.unscoped(() => fn(user, checked.args))
+      if (reading && whisper && /^[A-Za-z0-9_]{1,16}$/.test(user)) return replyStore.run(user, () => runtime.scope(() => fn(user, checked.args)))
       if (reading || !REPLANNABLE.has(name)) return runtime.scope(() => fn(user, checked.args))
       // 干活类指令：记下它说了什么，失败就把现状交给 AI 重新规划
       const said = []
@@ -1899,7 +1922,7 @@ bot.on('chat', handleChat)
 // 私聊不用加 bot 前缀
 bot.on('whisper', (user, message) => {
   if (user === bot.username || typeof message !== 'string') return
-  handleChat(user, /^bot\s/i.test(message.trim()) ? message : `bot ${message}`)
+  handleChat(user, /^bot\s/i.test(message.trim()) ? message : `bot ${message}`, { whisper: true })
 })
 
 // ---- 排队：忙时收到的指令，空闲后按顺序执行 ----

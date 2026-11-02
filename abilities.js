@@ -178,6 +178,7 @@ function createAbilities(bot, ctx) {
         const ids = step.blocks.map((n) => reg().blocksByName[n]?.id).filter((id) => id !== undefined)
         for (let tries = 0; tries < 3 && itemCount(step.item) < before + step.count; tries++) {
           const res = await ctx.mineIds(ids, before + step.count - itemCount(step.item), 72)
+          if (/背包满了/.test(res.error || '')) return `${label}挖 ${step.item} 停下：${res.error}` // 换原料也装不下
           if (res.error && !res.got) {
             if (!/需要更好的镐/.test(res.error)) step.blocks.forEach((b) => exclude.add(b)) // 下一轮换别的原料
             return `${label}挖 ${step.item} 失败：${res.error}`

@@ -30,13 +30,20 @@ function safeChatChunks(value) {
     const capacity = Math.min(180, remaining) - prefix.length
     if (capacity <= 0) break
     let end = Math.min(offset + capacity, source.length)
+    // 优先在分隔符后断开：背包列表曾被切成 "netherite_chestplatex" 和 "1" 两条（正式服实测）
+    if (end < source.length) {
+      const window = source.slice(offset, end)
+      const cut = Math.max(...[', ', '，', '；', '; ', '。', ' '].map((sep) => { const i = window.lastIndexOf(sep); return i < 0 ? -1 : i + sep.length }))
+      if (cut > capacity / 2) end = offset + cut
+    }
     // Never split the UTF-16 representation of a Unicode code point.
     if (end < source.length && /[\uD800-\uDBFF]/.test(source[end - 1])) end--
     if (end === offset) break
-    const chunk = prefix + source.slice(offset, end)
+    const chunk = prefix + source.slice(offset, end).trimEnd()
     chunks.push(chunk)
     remaining -= chunk.length
     offset = end
+    while (source[offset] === ' ') offset++
   }
   return chunks
 }

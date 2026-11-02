@@ -45,12 +45,28 @@ function createModes(bot, ctx) {
   }
   let escaping = false
 
+  // 下界实测：带着防火效果去找玩家，脚下踩到岩浆块、身上余火都在触发跑开，把赶路的目标顶掉（GoalChanged）后整趟放弃。
+  // 有防火时火和岩浆块伤不到人，只躲岩浆本身；赶路途中踩过岩浆块也不打断，走过去就离开了。
+  const fireResistant = () => {
+    const id = bot.registry.effectsByName?.fire_resistance?.id
+    return id !== undefined && !!bot.entity.effects?.[id]
+  }
+  function hazard(feet, below) {
+    const lava = [feet, below].find((b) => b?.name === 'lava')
+    if (lava) return 'lava'
+    if (fireResistant()) return null
+    const hot = [feet, below].find((b) => DANGER.has(b?.name))
+    if (hot && !(hot === below && hot.name === 'magma_block' && bot.pathfinder.isMoving())) return hot.name
+    return bot.entity.onFire ? '着火' : null
+  }
+
   const modes = {
     self_preservation() {
       const feet = bot.blockAt(bot.entity.position)
       const below = bot.blockAt(bot.entity.position.offset(0, -1, 0))
-      if (DANGER.has(feet?.name) || DANGER.has(below?.name) || bot.entity.onFire) {
-        ctx.log('[mode] 危险方块/着火，跑开')
+      const danger = hazard(feet, below)
+      if (danger) {
+        ctx.log(`[mode] 危险（${danger}），跑开`)
         moveAway(5)
         return true
       }

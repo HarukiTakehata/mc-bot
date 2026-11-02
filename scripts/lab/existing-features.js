@@ -55,7 +55,10 @@ const scenarios = {
     assert(gone.ok && lab.count('minecraft:iron_ingot') === 2, `过期记忆: ${gone.text}`)
     rcon(`clear ${TESTER} minecraft:iron_ingot`); await sleep(500)
     const du = await lab.cmd('bot dump', /存了杂物/, /箱子满|没有/, 20_000)
-    assert(du.ok && lab.count('minecraft:cobblestone') === 0 && lab.count('minecraft:diamond') === 1, `杂物: ${du.text}`)
+    // 共享背包模组同步有延迟：机器人说完立刻读服务器会读到旧背包（正式服拷贝上偶发）
+    let settled = false
+    for (let i = 0; i < 10 && !settled; i++) { settled = lab.count('minecraft:cobblestone') === 0 && lab.count('minecraft:diamond') === 1; if (!settled) await sleep(300) }
+    assert(du.ok && settled, `杂物: ${du.text}；圆石 ${lab.count('minecraft:cobblestone')} 钻石 ${lab.count('minecraft:diamond')}`)
     return {}
   },
   // ---- 农牧 ----
