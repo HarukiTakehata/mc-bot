@@ -20,7 +20,7 @@ farm [半径，默认16]（收成熟作物并补种）；breed 动物（喂两�
 tunnel [长度，默认16] [north/south/east/west]（挖1x2隧道，遇岩浆水停）；digdown [深度，默认8]；
 excavate 方块[,方块] [r=半径，默认16，最多32] [above=y] [below=y] [max=数量，默认128，最多512]（按条件批量挖土石沙这类天然方块，比如 excavate dirt,grass_block r=32 above=76）；
 inspect 物品（看物品本地信息和以前的试用笔记）；try 模组物品（亲手试：放下右键看界面/使用，结果会记住）；tip 关键词（查生存技巧）。
-建筑：build 模板 [m=材料] [at=x,y,z] [f=north|south|east|west]（模板 tower瞭望塔 wall墙 floor地板 stairs楼梯 pyramid金字塔；wall/floor/stairs/tower 可加 w= l= h= n= 尺寸；不提供盖房子：玩家要房子就直说盖不了，不要用 wall、fill、floor 拼一个）；materials 模板（先看要多少材料，不够就 get）；fill x1 y1 z1 x2 y2 z2 方块 [hollow]（最多256格）；bridge [长度] [方向]（边走边铺路过水过沟）；pillar [高度]（垫高）；paste 蓝图名；blueprints（列出）。
+建筑：build 模板 [m=材料] [at=x,y,z] [f=north|south|east|west]（模板 tower瞭望塔 wall墙 floor地板 stairs楼梯 pyramid金字塔；wall/floor/stairs/tower 可加 w= l= h= n= 尺寸；不提供盖房子：玩家要房子就直说盖不了，不要用 wall、fill、floor 拼一个）；materials 模板（先看要多少材料，不够就 get）；fill x1 y1 z1 x2 y2 z2 方块 [hollow]（最多256格）；bridge [长度] [方向]（边走边铺路过水过沟）；pillar [高度]（垫高，最多32）；paste 蓝图名；blueprints（列出）。
 红石：circuit 名字 [at=x,y,z] [f=朝向]（lamp灯 not非门 or或门 and与门 memory记忆单元 gate活塞门 autodoor压力板铁门 clock慢时钟 fastclock高速时钟 nightlight光感灯 dropbox收集箱，搭完自动功能自检）；wire x1 y1 z1 x2 y2 z2（拉同高度红石线，自动加中继器）；use [x y z]（按拉杆/按钮）；door open|close；repeater x y z 延迟；rs [半径]（看附近红石状态）；rstrace x y z（追踪走线）；rsdiag x y z（查灯/活塞为什么没动）。
 跑酷：parkour x y z（跳沟到达，只走摔不死的路线）；parkour check x y z（只看能不能到）。
 不要放 TNT、岩浆、火；不用钻石等稀有材料盖东西；at 不要落在别人的建筑上，默认建在机器人面前。建造前先 materials 核对。
@@ -114,6 +114,8 @@ function parseAIResult(content) {
     if (parsed.actions.length > 6) throw invalidResult('actions 超过 6 个，这轮只放前几步，其余放进 plan')
     if (typeof parsed.done !== 'boolean') throw invalidResult('done 必须是布尔值')
     const actions = Array.from(parsed.actions, (action, i) => {
+      // 无参指令（come/stop/sleep）常被写成只有 cmd；意思没有歧义，补上空参数，不为这个再花一轮。
+      if (hasFields(action, ['cmd'])) action = { cmd: action.cmd, args: [] }
       if (!hasFields(action, ['cmd', 'args'])) throw invalidResult(`第 ${i + 1} 个动作只能有 cmd 和 args，args 没有参数时写 []`)
       try {
         return normalizeAction(action.cmd, action.args, { ai: true })

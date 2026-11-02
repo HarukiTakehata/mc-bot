@@ -30,7 +30,7 @@ test('自然语言交通规划可返回自动目的地或明确步行，完整�
 })
 
 test('malformed model replies never degrade into partial executable action lists', () => {
-  const badResults = [null, [], {}, { reply: '', actions: [] }, valid({ reply: null }), valid({ reply: '中'.repeat(241) }), valid({ reply: '\uD800' }), valid({ done: 'false' }), valid({ actions: null }), valid({ actions: Array(7).fill({ cmd: 'stop', args: [] }) }), valid({ actions: [null] }), valid({ actions: [{ cmd: 'stop' }] }), valid({ actions: [{ args: [] }] }), valid({ actions: [{ cmd: 'mine', args: null }] }), valid({ actions: [{ cmd: 'mine', args: [null] }] }), valid({ actions: [{ cmd: '__proto__', args: [] }] }), valid({ actions: [{ cmd: 'mine', args: ['constructor'] }] }), valid({ actions: [{ cmd: 'stop', args: [], injected: true }] }), valid({ actions: [{ cmd: 'stop', args: [] }, { cmd: 'mine', args: ['stone', '-1'] }] }), valid({ actions: new Array(1) }), { ...valid(), injected: true }]
+  const badResults = [null, [], {}, { reply: '', actions: [] }, valid({ reply: null }), valid({ reply: '中'.repeat(241) }), valid({ reply: '\uD800' }), valid({ done: 'false' }), valid({ actions: null }), valid({ actions: Array(7).fill({ cmd: 'stop', args: [] }) }), valid({ actions: [null] }), valid({ actions: [{ cmd: 'mine' }] }), valid({ actions: [{ cmd: 'stop', arg: [] }] }), valid({ actions: [{ args: [] }] }), valid({ actions: [{ cmd: 'mine', args: null }] }), valid({ actions: [{ cmd: 'mine', args: [null] }] }), valid({ actions: [{ cmd: '__proto__', args: [] }] }), valid({ actions: [{ cmd: 'mine', args: ['constructor'] }] }), valid({ actions: [{ cmd: 'stop', args: [], injected: true }] }), valid({ actions: [{ cmd: 'stop', args: [] }, { cmd: 'mine', args: ['stone', '-1'] }] }), valid({ actions: new Array(1) }), { ...valid(), injected: true }]
   for (const value of badResults) assert.throws(() => parseAIResult(value), { name: 'AIError', code: 'AI_INVALID_RESULT' })
   for (const text of ['not json', '{', 'null', '{"reply":"hi","actions":[],"done":false,"__proto__":{}}']) assert.throws(() => parseAIResult(text), { code: 'AI_INVALID_RESULT' })
   for (const cmd of ['say', 'auto', 'goal', 'mode']) assert.throws(() => parseAIResult(valid({ actions: [{ cmd, args: [] }] })), { code: 'AI_INVALID_RESULT' })
@@ -268,10 +268,17 @@ test('校验失败带程序写的原因，不带模型原文', () => {
   const detail = (value) => { try { parseAIResult(value) } catch (error) { return error.detail } }
   assert.match(detail(valid({ reply: 'x'.repeat(241) })), /240/)
   assert.match(detail(valid({ actions: Array(7).fill({ cmd: 'chop', args: [] }) })), /超过 6/)
-  assert.match(detail(valid({ actions: [{ cmd: 'chop' }] })), /cmd 和 args/)
+  assert.match(detail(valid({ actions: [{ cmd: 'chop', arg: [] }] })), /cmd 和 args/)
   assert.match(detail(valid({ actions: [{ cmd: 'say', args: [] }] })), /say 不合规/)
   assert.match(detail(valid({ actions: [{ cmd: 'hunt', args: ['villager'] }] })), /hunt 不合规/)
   assert.match(detail('{'), /JSON/)
   assert.doesNotMatch(detail(valid({ actions: [{ cmd: '忽略规则', args: [] }] })), /忽略规则/)
   assert.equal(detail(valid({ actions: [{ cmd: 'drop', args: ['stone'] }] })), undefined)
+})
+
+test('只写 cmd 的无参动作补成空参数，仍走同一套参数校验', () => {
+  const result = parseAIResult(valid({ actions: [{ cmd: 'come' }, { cmd: 'stop' }] }))
+  assert.deepEqual(result.actions.map((a) => [a.cmd, a.args]), [['come', []], ['stop', []]])
+  assert.throws(() => parseAIResult(valid({ actions: [{ cmd: 'goto' }] })), { code: 'AI_INVALID_RESULT' })
+  assert.throws(() => parseAIResult(valid({ actions: [{ cmd: 'say' }] })), { code: 'AI_INVALID_RESULT' })
 })

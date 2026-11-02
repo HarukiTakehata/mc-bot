@@ -51,6 +51,7 @@ const bot = mineflayer.createBot({
   // 服务器只同步视距内的玩家位置：tiny(2 区块)只能看到 ~30 格，short(4) 约 60 格，内存多占几十 MB
   viewDistance: process.env.MC_VIEW || 'short',
   checkTimeoutInterval: 60_000,
+  hideErrors: true, // 下面的 error 监听已记一行；默认还会再打整段堆栈，服务器关着时每次重启刷十几行
 })
 
 setupFabric(bot, VERSION)
@@ -58,10 +59,11 @@ bot.setMaxListeners(50) // pathfinder 挖掘时重置路径会临时多挂监听
 
 // pathfinder 在"准备挖但还没开挖"时每次重置路径都会再挂一遍同一个监听器，
 // stopDigging 此时什么都不做，监听器就越堆越多（日志里的 MaxListenersExceededWarning）。同一函数只挂一次。
+// mineflayer-pvp 还在监听已弃用的 physicTick，每次启动都打一行弃用警告；两个事件同一 tick 发出，直接改挂新名。
 for (const method of ['on', 'addListener']) {
   const original = bot[method].bind(bot)
-  bot[method] = (event, fn) => ((event === 'diggingAborted' || event === 'diggingCompleted') &&
-    bot.listeners(event).includes(fn) ? bot : original(event, fn))
+  bot[method] = (event, fn) => event === 'physicTick' ? original('physicsTick', fn)
+    : ((event === 'diggingAborted' || event === 'diggingCompleted') && bot.listeners(event).includes(fn) ? bot : original(event, fn))
 }
 bot.loadPlugin(pathfinder)
 bot.loadPlugin(collectBlock)
@@ -1929,7 +1931,7 @@ bot.on('death', () => { flight?.dispose('death'); stopAll('death'); say('我挂�
 bot.on('messagestr', (msg) => { if (msg.startsWith(bot.username + ' ')) console.log('[server]', msg) })
 bot.on('kicked', (reason) => console.log('[kicked]', JSON.stringify(reason)))
 bot.on('error', (err) => console.log('[error]', err.message))
-bot.on('end', (reason) => { flight?.dispose('disconnect'); companion.dispose(); console.log('[end]', reason); process.exit(0) })
+bot.on('end', (reason) => { flight?.dispose('disconnect'); companion.dispose(); console.log('[end]', reason); exitForRetry(0) })
 let shuttingDown = false
 async function shutdown() {
   if (shuttingDown) return
@@ -1943,6 +1945,22 @@ async function shutdown() {
 }
 process.on('SIGINT', () => { shutdown().catch((err) => console.log('[shutdown]', err.message)) })
 process.on('SIGTERM', () => { shutdown().catch((err) => console.log('[shutdown]', err.message)) })
-// 常驻时由 launchd 负责重启：连不上或 60 秒内没进服就退出，等下次重试
-const spawnTimer = setTimeout(() => { console.log('[exit] 60 秒未进服'); process.exit(1) }, 60_000)
-bot.once('spawn', () => clearTimeout(spawnTimer))
+// 常驻时由 launchd 负责重启：连不上或 60 秒内没进服就退出，等下次重试。
+// 服务器关着时 launchd 每 30 秒拉起一次，线上停服一晚刷了七十多轮；没进过服就按连续失败次数多等一会再退出（最多 5 分钟）。
+const RETRY_FILE = path.join(__dirname, 'data', 'reconnect.json')
+let spawned = false
+const saveFailures = (failures) => { try { writeJSON(RETRY_FILE, { failures }) } catch (err) { console.log('[reconnect]', err.message) } }
+let exiting = false
+function exitForRetry(code) {
+  if (exiting) return
+  exiting = true
+  if (shuttingDown) return process.exit(code)
+  if (spawned) { saveFailures(0); return process.exit(code) }
+  const failures = (Number(readJSON(RETRY_FILE, {}).failures) || 0) + 1
+  saveFailures(failures)
+  const wait = Math.min(2 ** (failures - 1) * 15, 300)
+  console.log(`[reconnect] 连续第 ${failures} 次没进服，${wait} 秒后退出重试`)
+  setTimeout(() => process.exit(code), wait * 1000)
+}
+const spawnTimer = setTimeout(() => { console.log('[exit] 60 秒未进服'); exitForRetry(1) }, 60_000)
+bot.once('spawn', () => { spawned = true; clearTimeout(spawnTimer); saveFailures(0) })

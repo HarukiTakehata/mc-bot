@@ -713,6 +713,14 @@ function createBuilder(bot, ctx) {
     return { ok: walked > 0 && !/掉下去/.test(reason || ''), laid, walked }
   }
 
+  // 耕地、土径、灵魂沙不满一格：站在上面时脚的坐标取整后就是这块本身，不是下面那块。
+  // 线上：站在耕地上垫高，往"耕地下方块"的顶面放，服务器拒绝（"the block is still farmland"）。
+  function standingOn() {
+    const feet = bot.entity.position.floored()
+    const here = bot.blockAt(feet)
+    return here?.boundingBox === 'block' ? here : bot.blockAt(feet.offset(0, -1, 0))
+  }
+
   // 原地垫高（1x1 塔）：跳起来往脚下塞方块
   async function climb(height, item, onPlaced = () => {}) {
     let up = 0
@@ -720,11 +728,11 @@ function createBuilder(bot, ctx) {
     await bot.look(bot.entity.yaw, -Math.PI / 2, true)
     for (let i = 0; i < height; i++) {
       ctx.assertActive()
-      if (bot.blockAt(bot.entity.position.floored().offset(0, 2, 0))?.boundingBox !== 'empty') { reason = '头顶被挡住了'; break }
+      const ref = standingOn()
+      if (bot.blockAt(ref?.position.offset(0, 3, 0) ?? bot.entity.position.floored().offset(0, 2, 0))?.boundingBox !== 'empty') { reason = '头顶被挡住了'; break }
       if (!await equipFor(item)) { reason = `${item} 用完了`; break }
-      const floor = bot.entity.position.floored().offset(0, -1, 0)
-      const ref = bot.blockAt(floor)
       if (ref?.boundingBox !== 'block') { reason = '脚下不是实心方块'; break }
+      const floor = ref.position
       const targetY = floor.y + 1
       bot.setControlState('jump', true)
       const deadline = Date.now() + 1500

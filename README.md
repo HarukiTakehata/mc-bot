@@ -156,6 +156,13 @@ bot stop
 
 2026-10-29 的 `npm audit` 显示 11 个 moderate 传递关联项，均来自 [uuid 的缓冲区检查公告](https://github.com/advisories/GHSA-w5hq-g745-h8pq)，没有 high/critical。本次没有强制跨主版本覆盖或降级 Mineflayer 依赖；当前离线登录不代表全部依赖漏洞已被消除。共享血量/背包情况下，请在测试服确认复杂生存行为后再使用长目标。
 
+## 稳定性修正（1.8.1）
+
+- 日志：`start.sh` 预加载 `log-time.js`，`logs/bot.log` 每行带本地时间；连不上服务器只记一行原因，不再打整段堆栈和 physicTick 弃用警告。
+- 断线重连：没进过服就按连续失败次数退避（15、30、60…最多 300 秒）再退出交给 launchd，计数在 `data/reconnect.json`，进服后清零。
+- 垫高：站在耕地、土径这类不满一格的方块上也能 `pillar`（以前把方块放进耕地本身那格，被服务器拒绝）。
+- AI：只写 `cmd` 的无参动作自动补 `args: []`，仍走同一套校验；提示里写明 `pillar` 最多 32 格，少一轮返工。
+
 ## 经验和箱子记忆（1.8）
 
 - 经验：长期目标结束后，程序记下做成没有、用过的动作、卡在哪里（`data/experience.json`，最多 50 条，同一目标只留最新）。下次遇到相似目标放进 AI 的 state。玩家取消的不算。`bot lessons` 查看，`bot lessons clear` 清空（AI 不能清）。
