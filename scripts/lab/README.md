@@ -4,6 +4,12 @@
 
 所有游戏测试都要求显式设置 `LAB_CONTAINER`。未设置或格式无效时会在启动客户端、调用 Docker 和写入证据之前报错。客户端地址固定为 `127.0.0.1`；配置中的容器名是操作者选择的测试目标，脚本不能自动判断世界是否可丢弃。
 
+## 服务端前置条件
+
+- Minecraft 26.1 系列（包括 26.1.2）的原版或 Fabric 测试服需要 **Java 25**；Java 17/21 无法启动该版本服务端。见 [Minecraft 26.1 官方发布说明](https://www.minecraft.net/en-us/article/minecraft-java-edition-26-1)。这是服务端要求，不是 Node.js 机器人的运行要求。容器部署时应在容器内运行 `java -version` 核对版本，仅检查宿主机 Java 不够。
+- 运行测试脚本的主机必须安装 Docker CLI，并能访问运行测试容器的 Docker daemon；先用 `docker version` 检查。`LAB_CONTAINER` 只是选择已有容器，不会安装 Docker 或创建服务端。容器内还需配置可用的 `rcon-cli`、开启 `enable-rcon=true` 并匹配 RCON 端口和密码；可通过 `LAB_RCON_CONFIG` 指定客户端配置。
+- 隔离测试服使用 `online-mode=false` 供离线测试客户端连接，游戏端口仅发布到 `127.0.0.1`，并与 `LAB_PORT` 对齐；不要将离线测试服或 RCON 端口暴露到公网，也不要指向正式世界。
+
 | 变量 | 说明 |
 | --- | --- |
 | `LAB_CONTAINER` | 必填，本机隔离测试容器的名称或 ID，无默认值 |

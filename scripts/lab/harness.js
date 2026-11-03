@@ -18,7 +18,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function rcon(command) {
   const r = spawnSync('docker', config.rconArgs(command), { encoding: 'utf8', timeout: 30_000 })
-  if (r.status !== 0) throw new Error(`RCON 失败: ${command}: ${r.stderr || r.stdout}`)
+  if (r.error) {
+    const hint = r.error.code === 'ENOENT' ? '；请安装 Docker CLI 并确保 docker 在 PATH 中（LAB_CONTAINER 仅选择容器，不能替代 Docker）' : ''
+    throw new Error(`无法执行 docker（${r.error.code || 'UNKNOWN'}）：${r.error.message}${hint}`, { cause: r.error })
+  }
+  if (r.status !== 0) throw new Error(`RCON 失败: ${command}: ${r.stderr || r.stdout || (r.signal ? `signal=${r.signal}` : `exit status=${r.status}`)}`)
   const out = r.stdout.replace(/\x1b\[[0-9;]*m/g, '').trim()
   // rcon-cli 对命令错误也可能返回 0，必须另外检查语法错误。
   if (/Incorrect argument|Unknown or incomplete command|Expected .*<--\[HERE\]/.test(out)) throw new Error(`RCON 命令错误: ${command}: ${out}`)
