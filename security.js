@@ -4,8 +4,8 @@
 const RESERVED_NAMES = new Set([
   ...Object.getOwnPropertyNames(Object.prototype), 'prototype',
 ].map((name) => name.toLowerCase()))
-const NO_ARGS = new Set(['help', 'status', 'come', 'stay', 'stop', 'pos', 'hp', 'look', 'pickup', 'inv', 'sleep', 'eat', 'chest', 'surface', 'places', 'scan', 'advice', 'lastdeath', 'shear', 'milk', 'torch', 'dump', 'blueprints', 'undo'])
-const AI_ACTIONS = new Set(['inspect', 'try', 'tip', 'get', 'plan', 'farm', 'breed', 'shear', 'milk', 'fish', 'tunnel', 'digdown', 'excavate', 'torch', 'explore', 'dump', 'smelt', 'chest', 'chests', 'chestscan', 'fetch', 'deposit', 'withdraw', 'find', 'hunt', 'surface', 'equip', 'mark', 'go', 'note', 'stay', 'eat', 'come', 'follow', 'stop', 'goto', 'walk', 'mine', 'chop', 'pickup', 'craft', 'sleep', 'guard', 'build', 'paste', 'fill', 'materials', 'blueprints', 'bridge', 'pillar', 'use', 'door', 'repeater', 'rs', 'rstrace', 'rsdiag', 'circuit', 'wire', 'parkour'])
+const NO_ARGS = new Set(['help', 'status', 'come', 'stay', 'stop', 'pos', 'hp', 'look', 'pickup', 'inv', 'sleep', 'eat', 'chest', 'surface', 'places', 'scan', 'advice', 'lastdeath', 'shear', 'milk', 'torch', 'dump', 'blueprints', 'undo', 'workflows'])
+const AI_ACTIONS = new Set(['inspect', 'try', 'tip', 'get', 'plan', 'farm', 'breed', 'shear', 'milk', 'fish', 'tunnel', 'digdown', 'excavate', 'torch', 'explore', 'dump', 'smelt', 'chest', 'chests', 'chestscan', 'fetch', 'deposit', 'withdraw', 'find', 'hunt', 'surface', 'equip', 'mark', 'go', 'note', 'stay', 'eat', 'come', 'follow', 'stop', 'goto', 'walk', 'mine', 'chop', 'pickup', 'craft', 'sleep', 'guard', 'build', 'paste', 'fill', 'materials', 'blueprints', 'bridge', 'pillar', 'use', 'door', 'repeater', 'rs', 'rstrace', 'rsdiag', 'circuit', 'wire', 'parkour', 'run'])
 const HUNTABLE = new Set(['cow', 'pig', 'sheep', 'chicken', 'rabbit', 'mooshroom', 'goat', 'cod', 'salmon', 'slime'])
 const MODES = new Set(['self_preservation', 'unstuck', 'item_collecting', 'idle_staring', 'elbow_room', 'sleep_with_players'])
 const BREEDABLE = new Set(['cow', 'mooshroom', 'sheep', 'goat', 'pig', 'chicken', 'rabbit'])
@@ -103,7 +103,7 @@ function normalizeAction(cmd, args, { ai = false } = {}) {
   cmd = cmd.toLowerCase()
   if (!Array.isArray(args) || args.length > 600 || Array.from(args).some((arg) => typeof arg !== 'string' || arg.length > 600 || !arg.trim() || CONTROL.test(arg) || arg !== arg.toWellFormed())) fail('指令参数必须是有限的非空字符串数组')
   if (RESERVED_NAMES.has(cmd)) fail('不允许使用保留指令名')
-  if (ai && cmd === 'drop') fail('AI 不能丢弃共享物品，请玩家直接使用 bot drop <物品> [数量]')
+  if (ai && cmd === 'drop') fail('AI 不能丢弃物品，请玩家直接使用 bot drop <物品> [数量]')
   if (ai && !AI_ACTIONS.has(cmd)) fail('AI 不允许执行此指令')
   let normalized
   if (NO_ARGS.has(cmd)) {
@@ -152,6 +152,10 @@ function normalizeAction(cmd, args, { ai = false } = {}) {
   } else if (cmd === 'inspect' || cmd === 'try') {
     arity(args, 1)
     normalized = [safeName(args[0], 'item')]
+  } else if (cmd === 'run') {
+    arity(args, 1)
+    if (!/^[a-z0-9][a-z0-9_-]{0,47}$/.test(args[0])) fail('工作流名只能用小写字母、数字、_ 和 -')
+    normalized = [args[0]]
   } else if (cmd === 'tip') normalized = textArgs(args, 40, true)
   else if (cmd === 'replan') {
     arity(args, 0, 1)
@@ -275,6 +279,13 @@ function normalizeAction(cmd, args, { ai = false } = {}) {
   return { cmd, args: normalized }
 }
 
+// 扩展指令的参数：内容由扩展自己解释，这里只管边界——最多 8 个，每个 1 到 64 字符、单行
+function normalizeExtensionArgs(args) {
+  if (!Array.isArray(args) || args.length > 8) fail('扩展指令最多 8 个参数')
+  for (const arg of args) if (typeof arg !== 'string' || !arg || arg.length > 64 || CONTROL.test(arg) || arg !== arg.toWellFormed()) fail('扩展指令参数必须是 1 到 64 个字符的单行文本')
+  return [...args]
+}
+
 function createRateLimiter({ limit, windowMs, maxKeys = 256, now = Date.now }) {
   if (!Number.isSafeInteger(limit) || limit < 1 || !Number.isFinite(windowMs) || windowMs <= 0 || !Number.isSafeInteger(maxKeys) || maxKeys < 1 || typeof now !== 'function') throw new TypeError('限流配置不正确')
   const windows = new Map()
@@ -302,4 +313,4 @@ function createRateLimiter({ limit, windowMs, maxKeys = 256, now = Date.now }) {
   }
 }
 
-module.exports = { getCommand, safeChatChunks, normalizeAction, AI_ACTIONS, createRateLimiter }
+module.exports = { getCommand, safeChatChunks, normalizeAction, normalizeExtensionArgs, AI_ACTIONS, createRateLimiter }

@@ -1,5 +1,5 @@
-// 生存知识库：原版技巧 + 本服模组用法。按关键词挑相关几条放进 AI 提示（省 token），玩家也能 bot tip 查。
-// 原版数据按 1.18+ 地形（26.1 沿用）：矿石按高度分布。模组条目只写本服实际装了的模组。
+// 生存知识库：原版技巧 + 已启用模组扩展的用法（mods/、extensions/）。按关键词挑相关几条放进 AI 提示（省 token），玩家也能 bot tip 查。
+// 原版数据按 1.18+ 地形（26.1 沿用）：矿石按高度分布。
 const TIPS = [
   // ---- 矿物与高度 ----
   { keys: ['钻石', 'diamond', '挖矿', '矿'], text: '钻石在 Y -64~16，Y -58 附近最多；用铁镐以上；深层多岩浆，挖前先看周围，带水桶' },
@@ -49,7 +49,6 @@ const TIPS = [
   { keys: ['熔炉', '烧', 'smelt', '高炉'], text: '高炉烧矿石快一倍、烟熏炉烧食物快一倍；熔岩桶烧 100 个物品' },
 ]
 
-// 本服模组（data/production/mods）用法要点
 const BUILD_TIPS = [
   { keys: ['红石', 'redstone', '信号', '红石线'], text: '红石线信号每格减 1，最多传 15 格，用中继器续强度；信号能爬一格台阶，但台阶头顶有实心方块就断；bot rstrace 追走线、bot rsdiag 查为什么没电' },
   { keys: ['中继器', 'repeater', '延迟', '锁存'], text: '中继器单向传信号，1~4 档延迟（每档 0.1 秒）；侧面被另一个中继器供电时被锁存，输出保持不变，可做记忆单元' },
@@ -59,34 +58,24 @@ const BUILD_TIPS = [
   { keys: ['观察者', 'observer', '时钟', 'clock'], text: '观察者脸朝方块，方块一变就从背面发 1 刻脉冲；两个面对面就是停不下来的时钟，要拆才停，别长期留着卡服' },
   { keys: ['漏斗', 'hopper', '分类', '自动'], text: '漏斗从上方容器和上方掉落物吸东西，出口指向放置时点击的方块；被红石充能时停止工作' },
   { keys: ['建筑', '盖房', '房子', '屋', 'build', '基地'], text: '建造先看 bot materials，材料够再 bot build；光照到 8 以上才不刷怪，屋里要放火把；门用木门手能开，铁门要红石' },
-  { keys: ['跑酷', '跳', 'parkour', '沟'], text: '站立起跳最多越 2 格沟，疾跑能越 3 格，再远走不了；上一格的跳沟比平跳难。共享血量下别在岩浆和高空上跳' },
+  { keys: ['跑酷', '跳', 'parkour', '沟'], text: '站立起跳最多越 2 格沟，疾跑能越 3 格，再远走不了；上一格的跳沟比平跳难。岩浆和高空上方别冒险跳' },
 ]
 
-const MOD_TIPS = [
-  { keys: ['refinedstorage', '精致存储', 'rs', '存储系统', '控制器', 'controller', 'grid', '终端', 'disk'], text: '精致存储(Refined Storage)：控制器供电 → 线缆连磁盘驱动器(放存储盘) → 网格终端存取所有物品；合成器+样板可自动合成' },
-  { keys: ['waystone', '传送石碑', '传送', '路标', 'warp'], text: '传送石碑(Waystones)：右键激活后可在任意已激活石碑间传送，消耗经验；回城卷轴/传送石可随身传送' },
-  { keys: ['lootr', '战利品箱', '宝箱', '遗迹'], text: 'Lootr：结构里的战利品箱每个玩家单独一份，不用抢；打开过的箱子对你变空，对别人仍满' },
-  { keys: ['carryon', '搬运', '搬箱子', '抱'], text: 'Carry On：空手潜行右键可以把箱子、生物整个搬走（机器人做不到，需要玩家）' },
-  { keys: ['ultimine', '连锁', '一键挖', 'ftb'], text: 'FTB Ultimine：玩家按住连锁键挖矿可一次挖一整条矿脉/一棵树（客户端按键，机器人用不了）' },
-  { keys: ['shogi', '将棋'], text: 'Shogi 模组：可以下将棋的方块' },
-  { keys: ['共享', 'sharedinv', 'sharedhealth', '背包', '血量'], text: '本服所有人共享背包和血量：谁拿走东西大家都没了，一个人掉血全队掉血，危险操作先商量' },
-  { keys: ['地图', 'xaero', '小地图', '路径点'], text: 'Xaero 小地图/世界地图：玩家可设路径点，告诉机器人坐标即可 bot goto' },
-  { keys: ['team_reborn', '能量', 'energy'], text: '物品上的 energy 组件是模组能量（RF/E），需要对应机器充电' },
-]
-
-const all = [...TIPS, ...BUILD_TIPS, ...MOD_TIPS]
+const all = [...TIPS, ...BUILD_TIPS]
+// 模组扩展启用后接进来（进服拿到注册表才知道装了哪些模组）
+let mods = null
+function useMods(source) { mods = source }
 
 // 按文本里出现的关键词挑最相关的几条
 function relevantTips(text, max = 4) {
   const t = String(text || '').toLowerCase()
-  return all.map((tip) => ({ tip, hits: tip.keys.filter((k) => t.includes(k.toLowerCase())).length }))
+  return [...all, ...(mods?.tips() || [])].map((tip) => ({ tip, hits: tip.keys.filter((k) => t.includes(k.toLowerCase())).length }))
     .filter((x) => x.hits > 0).sort((a, b) => b.hits - a.hits).slice(0, max).map((x) => x.tip.text)
 }
 
-// 模组物品名 → 模组说明（按命名空间匹配）
+// 模组物品名 → 它所属模组扩展的说明（按命名空间匹配）
 function modTipFor(fullName) {
-  const ns = String(fullName).split(':')[0].toLowerCase()
-  return MOD_TIPS.find((m) => m.keys.some((k) => ns.includes(k.toLowerCase())))?.text || null
+  return mods?.summaryFor(fullName) || null
 }
 
-module.exports = { relevantTips, modTipFor, TIPS, MOD_TIPS }
+module.exports = { relevantTips, modTipFor, useMods, TIPS }

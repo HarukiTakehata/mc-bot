@@ -1,0 +1,20 @@
+{
+  "id": "waystones",
+  "name": "Waystones（传送石碑）",
+  "namespaces": ["waystones"],
+  "components": {
+    "waystones:description": "anonymousNbt",
+    "waystones:waystone": "anonymousNbt",
+    "waystones:attunement": "anonymousNbt",
+    "waystones:blank_scroll": "anonymousNbt",
+    "waystones:bound_scroll": "anonymousNbt",
+    "waystones:return_scroll": "anonymousNbt",
+    "waystones:waystone_identity": "anonymousNbt",
+    "waystones:waystone_attunement": "anonymousNbt",
+    "waystones:twinbound_feather": "anonymousNbt",
+    "waystones:twinbound_feather_links": "anonymousNbt"
+  },
+  "tips": [
+    { "keys": ["waystone", "传送石碑", "传送", "路标", "warp"], "text": "传送石碑(Waystones)：右键激活后可在任意已激活石碑间传送，消耗经验；回城卷轴/传送石可随身传送" }
+  ]
+}

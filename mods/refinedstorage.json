@@ -1,0 +1,14 @@
+{
+  "id": "refinedstorage",
+  "name": "Refined Storage（精致存储）",
+  "namespaces": ["refinedstorage"],
+  "components": {
+    "refinedstorage:energy": "varlong",
+    "refinedstorage:network_location": "GlobalPos",
+    "refinedstorage:storage_reference": "UUID",
+    "refinedstorage:storage_reference_to_be_transferred": "UUID"
+  },
+  "tips": [
+    { "keys": ["refinedstorage", "精致存储", "rs", "存储系统", "控制器", "controller", "grid", "终端", "disk"], "text": "精致存储(Refined Storage)：控制器供电 → 线缆连磁盘驱动器(放存储盘) → 网格终端存取所有物品；合成器+样板可自动合成" }
+  ]
+}

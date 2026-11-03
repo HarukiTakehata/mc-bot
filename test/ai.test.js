@@ -282,3 +282,65 @@ test('只写 cmd 的无参动作补成空参数，仍走同一套参数校验', 
   assert.throws(() => parseAIResult(valid({ actions: [{ cmd: 'goto' }] })), { code: 'AI_INVALID_RESULT' })
   assert.throws(() => parseAIResult(valid({ actions: [{ cmd: 'say' }] })), { code: 'AI_INVALID_RESULT' })
 })
+
+test('OpenAI 兼容后端：用自定义地址、不带 DeepSeek 专有参数；本机模型可以不要密钥', async () => {
+  const calls = []
+  const fetchImpl = async (url, init) => { calls.push([url, JSON.parse(init.body), init.headers]); return response() }
+  const ai = createAI({ provider: 'openai', apiKey: 'k', baseUrl: 'https://dashscope.example.com/compatible-mode/v1/', model: 'qwen-max', fetchImpl, getName: () => 'B' })
+  await ai.ask('P', '你好', '', [])
+  assert.equal(calls[0][0], 'https://dashscope.example.com/compatible-mode/v1/chat/completions')
+  assert.equal(calls[0][1].model, 'qwen-max')
+  assert.equal(calls[0][1].thinking, undefined)
+  assert.equal(calls[0][1].reasoning_effort, undefined)
+  assert.deepEqual(calls[0][1].response_format, { type: 'json_object' })
+  const local = createAI({ provider: 'openai', baseUrl: 'http://127.0.0.1:11434/v1', model: 'qwen2.5:7b', jsonMode: false, fetchImpl, getName: () => 'B' })
+  await local.ask('P', '你好', '', [])
+  assert.equal(calls[1][2].Authorization, undefined)
+  assert.equal(calls[1][1].response_format, undefined)
+})
+
+test('后端地址边界：非本机必须 https，不许带账号/查询参数；未知后端和越界限额拒绝', () => {
+  for (const baseUrl of ['http://api.example.com/v1', 'https://u:p@api.example.com', 'https://api.example.com/v1?x=1', 'ftp://x', 'not a url']) {
+    assert.throws(() => createAI({ provider: 'openai', apiKey: 'k', baseUrl }), TypeError, baseUrl)
+  }
+  assert.throws(() => createAI({ provider: 'openai', baseUrl: 'https://api.example.com/v1' }), /配置不正确/, '远程地址必须有密钥')
+  assert.throws(() => createAI({ provider: 'gemini', apiKey: 'k' }), /AI_PROVIDER/)
+  assert.throws(() => createAI({ apiKey: 'k', limits: { perMinute: 0 } }), /限额/)
+  assert.throws(() => createAI({ apiKey: 'k', limits: { perHour: 99999 } }), /限额/)
+  assert.equal(createAI({ apiKey: 'k', limits: { perMinute: '20' } }).statistics().minute.limit, 20)
+})
+
+test('Anthropic 后端：effort 映射、只对官方地址开回退、剥代码围栏、拒绝和截断不执行', async () => {
+  const { createAnthropicTransport } = require('../ai-anthropic')
+  const seen = []
+  const reply = (over = {}) => ({ content: [{ type: 'text', text: '```json\n' + JSON.stringify(valid()) + '\n```' }], stop_reason: 'end_turn', usage: { input_tokens: 10, output_tokens: 5 }, ...over })
+  let next = reply()
+  const client = {
+    messages: { create: async (p) => { seen.push(['plain', p]); return next } },
+    beta: { messages: { create: async (p) => { seen.push(['beta', p]); return next } } },
+  }
+  const ai = createAI({ provider: 'anthropic', apiKey: 'k', getName: () => 'B', transport: createAnthropicTransport({ apiKey: 'k', client }) })
+  const result = await ai.ask('P', '你好', '', [], { effort: 'off' })
+  assert.equal(result.reply, valid().reply)
+  assert.equal(seen[0][0], 'beta')
+  assert.deepEqual(seen[0][1].betas, ['server-side-fallback-2026-07-01'])
+  assert.equal(seen[0][1].fallbacks, 'default')
+  assert.equal(seen[0][1].model, 'claude-opus-5-5')
+  assert.deepEqual(seen[0][1].output_config, { effort: 'low' })
+  assert.equal(seen[0][1].thinking, undefined, '思考关不掉，不发 thinking')
+  assert.match(seen[0][1].system, /Minecraft/)
+  assert.equal(seen[0][1].messages.at(-1).role, 'user')
+  const proxied = createAnthropicTransport({ apiKey: 'k', client, baseUrl: 'https://proxy.example.com' })
+  await proxied({ system: 's', messages: [], effort: 'high' })
+  assert.equal(seen.at(-1)[0], 'plain', '代理地址不发回退参数')
+  assert.deepEqual(seen.at(-1)[1].output_config, { effort: 'high' })
+  next = reply({ stop_reason: 'refusal', content: [] })
+  await rejectsCode(ai.ask('P', '再来', '', []), 'AI_REFUSED')
+  next = reply({ stop_reason: 'max_tokens' })
+  await rejectsCode(ai.ask('P', '再来', '', []), 'AI_INVALID_RESULT')
+})
+
+test('传输层抛出带 status 的错误时只报状态码，不泄露正文', async () => {
+  const ai = makeAI({ transport: async () => { const e = new Error('secret body sk-123'); e.status = 429; throw e } })
+  await assert.rejects(ai.ask('P', '你好', '', []), (err) => err.code === 'AI_HTTP_ERROR' && /429/.test(err.message) && !/sk-123/.test(err.message))
+})

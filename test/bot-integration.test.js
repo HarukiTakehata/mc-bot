@@ -8,7 +8,7 @@ const { EventEmitter } = require('node:events')
 const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r }); return { promise, resolve } }
 const flush = async () => { for (let n = 0; n < 8; n++) await new Promise(setImmediate) }
 
-function harness({ ask = async () => ({ reply: '', actions: [], done: false }), taskWait, flightWait, routeHook, fastGoalDelays = false } = {}) {
+function harness({ ask = async () => ({ reply: '', actions: [], done: false }), taskWait, flightWait, routeHook, fastGoalDelays = false, extensions } = {}) {
   const sent = [], marks = [], calls = [], logs = []
   const engines = []
   const bot = new EventEmitter()
@@ -64,6 +64,7 @@ function harness({ ask = async () => ({ reply: '', actions: [], done: false }), 
     return engine
   } }
   const root = path.resolve(__dirname, '..')
+  if (extensions) mods['./mods'] = { createMods: (opts) => require('../mods').createMods({ ...opts, defs: extensions, log: (...a) => logs.push(a.join(' ')) }) }
   const context = vm.createContext({
     require: (name) => mods[name] || (name === 'vec3' || require('node:module').isBuiltin(name) ? require(name) : require(path.resolve(root, name))),
     console: { log: (...args) => logs.push(args.join(' ')) },
@@ -266,4 +267,38 @@ test('水里：站在坑底可以挖出去，浮在深水里仍不许挖放', ()
   }
   assert.equal(make(dirt), 2) // 1x1 水坑：出路要挖
   assert.equal(make(water), 1) // 深水浮着：只留不用挖放的
+})
+
+test('模组扩展指令：玩家能用、AI 用不了、不能抢已有指令名、参数有边界', async () => {
+  const { validate } = require('../mods')
+  const runs = []
+  const ext = validate({
+    id: 'demo', activate: 'always', prompt: '本服有演示扩展',
+    setup(api) {
+      api.command('hello', { help: '打个招呼', read: true, run: (user, args) => { runs.push(['hello', user, ...args]); api.say(`你好 ${user}`) } })
+      api.command('ping', { run: async (user) => { runs.push(['ping', user]) } })
+      api.command('stop', { run: () => runs.push(['evil-stop']) })
+    },
+  }, { code: true })
+  const h = harness({ extensions: [ext] })
+  h.bot.emit('login')
+  await flush()
+  assert.ok(h.logs.some((l) => /setup 出错: 指令 stop 已经存在/.test(l)))
+  h.bot.emit('chat', 'Player', 'bot hello 世界')
+  await flush()
+  assert.deepEqual(runs.shift(), ['hello', 'Player', '世界'])
+  assert.ok(h.sent.some((s) => s.includes('你好 Player')))
+  h.bot.emit('chat', 'Player', 'bot ping')
+  await flush()
+  assert.deepEqual(runs.shift(), ['ping', 'Player'])
+  assert.ok(h.logs.some((l) => /\[task\] start ping（demo）/.test(l)), '干活类扩展指令走 runTask')
+  h.sent.length = 0
+  h.bot.emit('chat', 'Player', 'bot hello ' + 'x'.repeat(65))
+  await flush()
+  assert.equal(runs.length, 0, '超长参数不交给扩展')
+  h.bot.emit('chat', 'Player', 'bot stop')
+  await flush()
+  assert.equal(runs.length, 0, 'stop 仍是内置指令')
+  assert.ok(!require('../security').AI_ACTIONS.has('hello'))
+  assert.equal(h.inner('mods').promptNotes(), '本服有演示扩展')
 })

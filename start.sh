@@ -12,5 +12,5 @@ if [[ -f logs/bot.log && $(stat -f%z logs/bot.log) -gt 5000000 ]]; then
   : > logs/bot.log
 fi
 # 使用 Node 的 dotenv 解析，不把配置内容作为 shell 代码执行。
-export MC_VERSION=${MC_VERSION:-26.1}
+# MC_VERSION 不填就自动检测服务器版本
 exec node --env-file-if-exists=.env --max-old-space-size=256 --require ./log-time.js bot.js

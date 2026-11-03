@@ -1,0 +1,8 @@
+{
+  "id": "carryon",
+  "name": "Carry On",
+  "namespaces": ["carryon"],
+  "tips": [
+    { "keys": ["carryon", "搬运", "搬箱子", "抱"], "text": "Carry On：空手潜行右键可以把箱子、生物整个搬走（机器人做不到，需要玩家）" }
+  ]
+}

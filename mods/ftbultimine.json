@@ -1,0 +1,8 @@
+{
+  "id": "ftbultimine",
+  "name": "FTB Ultimine",
+  "namespaces": ["ftbultimine"],
+  "tips": [
+    { "keys": ["ultimine", "连锁", "一键挖", "ftb"], "text": "FTB Ultimine：玩家按住连锁键挖矿可一次挖一整条矿脉/一棵树（客户端按键，机器人用不了）" }
+  ]
+}

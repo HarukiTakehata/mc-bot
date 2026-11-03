@@ -1,0 +1,10 @@
+{
+  "$comment": "复制为 config.json。只放非密钥设置；密钥写 .env。环境变量优先于这里。",
+  "server": { "host": "127.0.0.1", "port": 25565, "username": "Claude_Bot", "viewDistance": "short" },
+  "chat": { "prefixes": ["cb"] },
+  "ai": { "provider": "openai", "baseUrl": "http://127.0.0.1:11434/v1", "model": "qwen2.5:14b", "jsonMode": true, "perMinute": 10 },
+  "agent": { "port": 25599 },
+  "mods": { "enable": [], "disable": [] },
+  "workflows": { "auto": true },
+  "greet": { "serverName": "我的服务器" }
+}

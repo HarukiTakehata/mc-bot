@@ -1,0 +1,8 @@
+{
+  "id": "lootr",
+  "name": "Lootr",
+  "namespaces": ["lootr"],
+  "tips": [
+    { "keys": ["lootr", "战利品箱", "宝箱", "遗迹"], "text": "Lootr：结构里的战利品箱每个玩家单独一份，不用抢；打开过的箱子对你变空，对别人仍满" }
+  ]
+}

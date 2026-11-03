@@ -7,3 +7,7 @@ logs/
 *.log
 *.tmp
 .DS_Store
+extensions/*
+!extensions/README.md
+!extensions/examples/
+config.json

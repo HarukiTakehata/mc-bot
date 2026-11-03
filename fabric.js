@@ -4,30 +4,14 @@
 // 2. 注册表：解析服务器发来的 fabric:registry/sync，给模组物品补上名字。
 // 3. 方块：模组方块的状态 ID 排在原版之后，但不知道每个方块有几个状态，
 //    统一当成"实心、不可挖"的 modded_block，寻路会绕开，不会挖坏别人的机器。
-// 4. 物品组件：模组组件没有长度前缀，必须知道编码才能跳过。下面的编码是
-//    在 test 服用 /give 带组件、抓原始字节逐个确认的；没确认的保持未知。
+// 4. 物品组件：模组组件没有长度前缀，必须知道编码才能跳过。编码由各模组扩展（mods/、extensions/）提供，
+//    没人声明的保持未知：带这种组件的物品解析失败，而不是读歪后面的数据。
+// 原版服、Paper/Spigot 不会发这些包，这里什么都不做。
 const mcData = require('minecraft-data')
 
 const CHANNELS = ['c:register', 'c:version', 'fabric:registry/sync/direct', 'fabric:registry/sync']
-
-// 已确认的模组组件编码（minecraft-protocol 类型名）
-const COMPONENT_CODECS = {
-  'refinedstorage:energy': 'varlong',
-  'refinedstorage:network_location': 'GlobalPos',
-  'refinedstorage:storage_reference': 'UUID',
-  'refinedstorage:storage_reference_to_be_transferred': 'UUID',
-  'team_reborn_energy:energy': 'varlong',
-  'waystones:description': 'anonymousNbt',
-  'waystones:waystone': 'anonymousNbt',
-  'waystones:attunement': 'anonymousNbt',
-  'waystones:blank_scroll': 'anonymousNbt',
-  'waystones:bound_scroll': 'anonymousNbt',
-  'waystones:return_scroll': 'anonymousNbt',
-  'waystones:waystone_identity': 'anonymousNbt',
-  'waystones:waystone_attunement': 'anonymousNbt',
-  'waystones:twinbound_feather': 'anonymousNbt',
-  'waystones:twinbound_feather_links': 'anonymousNbt',
-}
+// 这些加载器的握手完全不同，装作原版进不去，至少把原因说清楚
+const OTHER_LOADERS = [[/^(neoforge|fml):/, 'NeoForge'], [/^(forge|fml):/, 'Forge']]
 
 const MODDED_BLOCK_ID = 100000
 
@@ -95,21 +79,45 @@ function parseRegistrySync(buf) {
   return registries
 }
 
-function patchComponents(version, components) {
+function patchComponents(version, components, codecs = new Map()) {
   const types = mcData(version).protocol.types
   const mappings = types.SlotComponentType[1].mappings
   const fields = types.SlotComponent[1][1].type[1].fields
   const vanillaCount = Object.keys(mappings).length
+  let known = 0, unknown = 0
   components.forEach((full, id) => {
     if (id < vanillaCount) {
       if (`minecraft:${mappings[id]}` !== full) console.log(`[fabric] 组件 ${id} 不一致: ${mappings[id]} vs ${full}`)
       return
     }
-    const codec = COMPONENT_CODECS[full]
-    if (!codec) return // 编码未知：保持未映射，解析时报错而不是读歪
+    const codec = codecs.get(full)
+    // 编码未知，或这个版本的协议里没有这个类型：保持未映射，解析时报错而不是读歪
+    if (!codec || !types[codec]) { unknown++; return }
     mappings[id] = full
     fields[full] = codec
+    known++
   })
+  if (known || unknown) console.log(`[fabric] 模组物品组件：认识 ${known} 个，不认识 ${unknown} 个（带不认识组件的物品读不出来，可在扩展里补 components）`)
+}
+
+// brand 负载是一个带 VarInt 长度前缀的字符串；只取可打印部分、限长，防止日志被塞怪字符
+function readBrand(buf) {
+  try {
+    const b = Buffer.from(buf)
+    let len = 0, shift = 0, i = 0
+    for (; i < 5 && i < b.length; i++) { len |= (b[i] & 0x7f) << shift; shift += 7; if (!(b[i] & 0x80)) { i++; break } }
+    return b.subarray(i, i + Math.min(len, 64)).toString('utf8').replace(/[^\x20-\x7e]/g, '?') || '未知'
+  } catch { return '未知' }
+}
+
+// 注册表里出现过的非原版命名空间，用来决定启用哪些模组扩展
+function namespacesOf(registries) {
+  const out = new Set()
+  for (const entries of Object.values(registries)) for (const full of entries) {
+    const ns = full.slice(0, full.indexOf(':'))
+    if (ns && ns !== 'minecraft') out.add(ns)
+  }
+  return out
 }
 
 function patchRegistry(bot, registries) {
@@ -148,23 +156,45 @@ function patchRegistry(bot, registries) {
   console.log(`[fabric] 模组物品 ${moddedItems} 个，模组方块 ${moddedBlocks} 种（统一视为 modded_block）`)
 }
 
-function setupFabric(bot, version) {
+// onRegistries(namespaces) 返回要用的组件编码 Map（模组扩展在这时决定启用哪些）。
+// version 不传就用连接实际协商出的版本（MC_VERSION 留空时自动检测）。
+function setupFabric(bot, { version, onRegistries = () => new Map() } = {}) {
   let registries = null
+  let vanillaOnly = false // NeoForge/Forge：以原版客户端身份进，不声明任何模组频道
+  let brandLogged = false
   bot._client.on('packet', (data, meta) => {
+    if (meta.name === 'custom_payload' && !brandLogged && /^(minecraft:brand|MC\|Brand)$/.test(data.channel || '')) {
+      brandLogged = true
+      console.log(`[loader] 服务器类型 ${readBrand(data.data)}`)
+    }
     if (meta.state !== 'configuration') return
     const c = bot._client
-    if (meta.name === 'ping') return c.write('pong', { id: data.id })
+    // mineflayer 自己会答 ping（所有阶段）；再答一次，NeoForge 会把第二个 pong 当成下一步的确认，然后报 synchronize_registries 没完成踢人。
+    // 只有裸 minecraft-protocol 客户端（注册表探测脚本）没人答，才由这里答
+    if (meta.name === 'ping') return c.listenerCount('ping') ? undefined : c.write('pong', { id: data.id })
     if (meta.name !== 'custom_payload') return
     const ch = data.channel
     if (ch === 'minecraft:register') {
+      // NeoForge 的频道表里有 neoforge:*：只要回了频道表，它就当我们是模组客户端、等一个永远不会来的注册表同步，然后踢人。
+      // 什么都不回、只答 ping，它就按原版客户端放行（服务器没有必须装在客户端的模组时）。
+      const listed = Buffer.from(data.data).toString('utf8').split('\0')
+      const other = OTHER_LOADERS.find(([re]) => listed.some((x) => re.test(x)))
+      if (other) {
+        if (!vanillaOnly) console.log(`[loader] 服务器是 ${other[1]}，以原版客户端身份进入（服务器装了必须客户端也装的模组时会被拒）`)
+        vanillaOnly = true
+        return
+      }
       c.write('custom_payload', { channel: 'minecraft:register', data: Buffer.from(CHANNELS.join('\0')) })
+    } else if (vanillaOnly) {
+      // 不回应任何加载器私有频道
     } else if (ch === 'c:version' || ch === 'c:register') {
       c.write('custom_payload', { channel: ch, data: Buffer.from(data.data) })
     } else if (ch.startsWith('fabric:registry/sync')) {
       // 必须在进入 play 阶段之前改好协议，play 的解析器是那时才编译的
       try {
         const parsed = parseRegistrySync(Buffer.from(data.data))
-        patchComponents(version, parsed.data_component_type || [])
+        const codecs = onRegistries(namespacesOf(parsed))
+        patchComponents(version || c.version, parsed.data_component_type || [], codecs instanceof Map ? codecs : new Map())
         registries = parsed
       } catch (err) {
         registries = null
@@ -178,4 +208,4 @@ function setupFabric(bot, version) {
   bot.once('login', () => { if (registries) patchRegistry(bot, registries) })
 }
 
-module.exports = { setupFabric, MODDED_BLOCK_ID, parseRegistrySync }
+module.exports = { setupFabric, MODDED_BLOCK_ID, parseRegistrySync, patchComponents, namespacesOf, readBrand }

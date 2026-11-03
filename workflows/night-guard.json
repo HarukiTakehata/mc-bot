@@ -1,0 +1,14 @@
+{
+  "$comment": "示例：天黑时（且空闲）自动在原地站岗，天亮由 day 触发的工作流收工。默认手动，改 trigger 就会自动跑",
+  "id": "night-guard",
+  "name": "夜里站岗",
+  "description": "插火把、原地守夜",
+  "trigger": { "on": "manual" },
+  "onFail": "continue",
+  "steps": [
+    { "do": "torch" },
+    { "do": "guard", "args": ["on"] },
+    { "do": "stay" },
+    { "say": "我在这守着，天亮前别走远" }
+  ]
+}

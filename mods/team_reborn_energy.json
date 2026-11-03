@@ -1,0 +1,9 @@
+{
+  "id": "team_reborn_energy",
+  "name": "Team Reborn Energy（能量 API）",
+  "namespaces": ["team_reborn_energy"],
+  "components": { "team_reborn_energy:energy": "varlong" },
+  "tips": [
+    { "keys": ["team_reborn", "能量", "energy"], "text": "物品上的 energy 组件是模组能量（RF/E），需要对应机器充电" }
+  ]
+}

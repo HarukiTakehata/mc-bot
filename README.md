@@ -1,13 +1,15 @@
 # Minecraft 合作生存机器人
 
-基于 Mineflayer，保留本地 Fabric 26.1 的注册表与组件适配。需要 Node.js 22.17 或更高版本；当前主机验证版本为 24.22.1。
+基于 Mineflayer 的合作生存机器人。原版、Paper/Spigot、Fabric、Forge、NeoForge 服务器都能进，不指定版本时自动检测服务器版本。AI 后端可选 DeepSeek、任意 OpenAI 兼容接口（含本机 Ollama）或 Claude，也可以交给外部 agent（本机 HTTP 接口 / MCP）。能自己写工作流和模组扩展。需要 Node.js 22.17 或更高版本；当前主机验证版本为 24.22.1。
+
+扩展和接入的完整写法见 [docs/extending.md](docs/extending.md)。
 
 ## 启动与验证
 
 ```sh
 npm ci --ignore-scripts
 cp .env.example .env
-# 在 .env 填写 DEEPSEEK_API_KEY；不填则只启用固定指令。
+# 在 .env 填写 AI 密钥（见 .env.example）；不填则只启用固定指令。
 npm run check
 npm test
 MC_HOST=127.0.0.1 npm start
@@ -20,6 +22,44 @@ MC_HOST=127.0.0.1 npm start
 所有玩家都可以控制机器人，这是本项目的预期玩法。输入 `bot help` 查看技能；新增 `bot status` 查看当前任务及 AI 额度，`bot unmark <地点名>` 删除地点。`bot stop` 取消当前目标、在途 AI 和后续任务动作，并关闭自主规划；本地自卫与自救继续工作。已发送给服务器的操作无法撤回，旧工作仍未收尾时会拒绝新工作。
 
 常用指令：`bot come`、`bot follow`、`bot goto x y z`、`bot mine stone 4`、`bot craft stone_pickaxe 1`、`bot smelt raw_iron 8`、`bot mark 家`、`bot go 家`、`bot goal 收集一些木头`。长期目标保留发起人；模型判断完成时会提示玩家核对游戏结果。
+
+## 兼容性
+
+能进的服务器：原版、Paper/Spigot、Fabric、Forge、NeoForge。`MC_VERSION` 不填时自动检测服务器版本；mineflayer 能支持的范围是 1.8.8 ~ 26.1，更新的服务器要等 mineflayer 更新，或者在服务器装 ViaVersion。
+
+1.9.0 实测：每个服务器跑同一套 12 项检查，包括不指定版本进服、按服务器启用扩展、打招呼、扩展指令、私聊回复、查坐标、help、挖泥土、`come` 走到玩家身边、日志无报错。
+
+| 服务器 | 版本 | 结果 |
+|---|---|---|
+| 原版 | 26.1.2 | 12/12 |
+| Fabric（正式服拷贝，70 个模组） | 26.1.2 | 12/12（模组物品组件认识 15 个） |
+| Paper | 26.1.2 | 12/12 |
+| Forge 64.1.5 | 26.1.2 | 12/12 |
+| NeoForge | 26.1.2 | 12/12 |
+| 原版 | 1.21.11、1.21.8、1.21.4、1.21.1、1.20.6、1.20.4 | 全部 12/12 |
+| 原版 | 1.20.1、1.19.4 | 12/12（首轮各有一项因地形失败：1.20.1 贴墙卡住，已改成所有版本都修正；1.19.4 漂在水里挖不到岸边泥土，已加上岸逻辑；重跑都通过） |
+| 原版 | 1.18.2、1.17.1、1.16.5、1.12.2 | 全部 12/12 |
+
+边界：
+- **鞘翅自动飞行**：只在 26.1 上开。烟花校验依赖 26.1 的物品组件格式，其他版本赶路一律步行。
+- **26.1 专属修正**：鞘翅动作名映射只在 26.1 生效；挖掘工具等级在其他版本上本来就是对的，不需要修正。
+- **所有版本都生效的修正**：贴墙卡住、附魔读法。
+- **NeoForge / Forge**：机器人以原版客户端身份进入。服务器装了必须客户端也装的模组时会被拒，日志里会说明。
+- **Fabric 模组物品**：靠模组扩展里声明的组件编码识别，没声明的物品读不出来。
+- **知识库**：矿石高度按 1.18 以后的地形写；1.17 及更早版本里，AI 拿到的矿物建议会不准。
+- **1.12.2**：基础指令能用，但 1.13 前的物品名不一样（比如原木叫 `log`），涉及物品名的高级指令（`get`、`plan`、合成配方）不保证。
+
+## 配置与接入（1.9.0）
+
+- **配置**：非密钥设置可以写进 `config.json`（参考 `config.example.json`），密钥只能放 `.env`（参考 `.env.example`）。环境变量优先于文件。
+- **唤醒词**：`bot` 一直有效，`MC_PREFIX=cb,小助手` 可以再加最多 4 个。
+- **AI 后端**：用 `AI_PROVIDER` 选 `deepseek`、`openai`、`anthropic`、`external` 或 `off`。
+- **Agent API / MCP**：设了 `MC_AGENT_PORT` 和 `MC_AGENT_TOKEN` 就会开本机接口。`npm run mcp` 启动 MCP 服务器，Claude Code、Cursor 等客户端可以直接操控机器人。
+- **工作流**：`workflows/*.json` 把一串指令编排成一件事，用 `bot run <id>` 运行、`bot workflows` 列出。可以开放给 AI 调用，也可以按天黑、空闲、定时等条件自动触发。
+- **模组扩展**：内置的在 `mods/`，自己写的放 `extensions/`。`.json` 只有数据（组件编码、知识、AI 提示、服务器规则）；`.js` 能注册指令和事件。扩展按服务器注册表里出现的命名空间自动启用，纯服务端模组用 `MC_MODS` 点名。
+- **打招呼特效**：用 `MC_RCON_PASSWORD` 直连 RCON，或者用 `MC_CTL` 指定控制台脚本；都不配时用 `/msg`。
+
+以前写死的本服设置现在都要显式配置：共享背包和血量用 `MC_MODS=shared-world`，控制台脚本用 `MC_CTL`，欢迎语里的服务器名用 `MC_SERVER_NAME`。
 
 ## 自动赶路（1.6.0）
 

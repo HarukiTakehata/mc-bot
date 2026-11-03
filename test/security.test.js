@@ -222,3 +222,11 @@ test('长列表在逗号后分段，不把物品名和数量拆开；断开后�
   assert.equal(chunks.join(' ').replace(/,$/, ''), inv)
   assert.equal(safeChatChunks('a'.repeat(175) + '  /opxxxxxxxxxx yy')[1].slice(0, 3), '·/o')
 })
+
+test('扩展指令参数：最多 8 个、每个 1 到 64 字符、单行', () => {
+  const { normalizeExtensionArgs } = require('../security')
+  assert.deepEqual(normalizeExtensionArgs(['a', '中文']), ['a', '中文'])
+  assert.throws(() => normalizeExtensionArgs(Array(9).fill('a')), /最多 8/)
+  assert.throws(() => normalizeExtensionArgs(['x'.repeat(65)]), /64/)
+  assert.throws(() => normalizeExtensionArgs(['a\u0000b']), /单行/)
+})

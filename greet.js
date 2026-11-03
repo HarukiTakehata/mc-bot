@@ -1,8 +1,10 @@
 // 有人上线时私聊打招呼。带颜色、渐变、标题、音效、粒子的特效需要 /tellraw 等管理员指令，
-// 机器人本身不是 OP，所以通过本机的 mcctl.py console（RCON）以服务器控制台身份发送，
-// 只发给上线的那个人。控制台不可用时退回普通 /msg 私聊。
+// 机器人本身不是 OP，所以以服务器控制台身份发送，只发给上线的那个人。两种控制台任选：
+//   MC_RCON_PASSWORD（+ MC_RCON_HOST、MC_RCON_PORT）：直接走 RCON
+//   MC_CTL：本机的控制台脚本，按 python3 <MC_CTL> --world <MC_WORLD> console <指令> 调用
+// 都没配或不可用时退回普通 /msg 私聊。
 const { execFile } = require('child_process')
-const path = require('path')
+const { rconRun } = require('./rcon')
 
 const USERNAME = /^[A-Za-z0-9_]{1,16}$/
 const COOLDOWN = 10 * 60_000 // 同一个人 10 分钟内重进不再打招呼
@@ -25,8 +27,9 @@ function timeGreeting(hour) {
 }
 
 // 生成要在控制台执行的指令（纯函数，方便测试）
-function greetingCommands(name, botName, { hour = new Date().getHours(), online = 1 } = {}) {
+function greetingCommands(name, botName, { hour = new Date().getHours(), online = 1, serverName = '' } = {}) {
   if (!USERNAME.test(name)) throw new Error('玩家名不合法')
+  const server = serverNameOf(serverName)
   const sparkle = { text: '✦✧', color: '#FFD700', obfuscated: true }
   const arrow = { text: '  ➤ ', color: 'dark_gray' }
   // RCON 单条指令上限约 1446 字节（中文 3 字节一个），所以一行一条 tellraw
@@ -34,7 +37,7 @@ function greetingCommands(name, botName, { hour = new Date().getHours(), online 
     [sparkle, ' ', ...gradient(`${botName} 悄悄对你说`, { bold: true }), ' ', sparkle],
     [arrow, { text: `${timeGreeting(hour)}，`, color: 'white' },
       { text: name, color: 'gold', bold: true },
-      { text: '！欢迎回到 ', color: 'white' }, ...gradient('Luomo 合作生存', { italic: true })],
+      ...(server ? [{ text: '！欢迎回到 ', color: 'white' }, ...gradient(server, { italic: true })] : [{ text: '！欢迎回来', color: 'white' }])],
     [arrow, { text: `现在有 ${online} 位伙伴在线，我随时帮你干活`, color: 'gray' }],
     [arrow, { text: '说 ', color: 'gray' },
       { text: '[bot help]', color: 'aqua', underlined: true,
@@ -60,22 +63,44 @@ function greetingCommands(name, botName, { hour = new Date().getHours(), online 
   ]
 }
 
-function createGreeter(bot, ctx) {
-  const ctl = process.env.MC_CTL || path.join(process.env.HOME || '', 'Minecraft/luomo-coop-server-26.1/scripts/mcctl.py')
-  const world = process.env.MC_WORLD || (['127.0.0.1', 'localhost'].includes(process.env.MC_HOST || '127.0.0.1') ? 'test' : 'production')
+// 服务器名只用于欢迎语：单行、最长 32 字，不合格就不写
+function serverNameOf(value) {
+  const s = String(value || '').trim()
+  return s.length <= 32 && !/[\p{Cc}\p{Cf}\u2028\u2029]/u.test(s) ? s : ''
+}
+
+// 按环境变量选控制台；返回 null 表示没有控制台，只能 /msg
+function consoleFrom(env) {
+  if (env.MC_RCON_PASSWORD) {
+    const port = Number(env.MC_RCON_PORT || 25575)
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('MC_RCON_PORT 不是合法端口')
+    const options = { host: env.MC_RCON_HOST || env.MC_HOST || '127.0.0.1', port, password: env.MC_RCON_PASSWORD }
+    return (commands) => rconRun(options, commands)
+  }
+  if (env.MC_CTL) {
+    const world = env.MC_WORLD || 'production'
+    const one = (command) => new Promise((resolve, reject) => {
+      execFile('/usr/bin/python3', [env.MC_CTL, '--world', world, 'console', command], { timeout: 10_000 },
+        (err) => (err ? reject(err) : resolve()))
+    })
+    return async (commands) => { for (const c of commands) await one(c) }
+  }
+  return null
+}
+
+function createGreeter(bot, ctx, env = process.env) {
+  let run = null
+  try { run = consoleFrom(env) } catch (err) { ctx.log(`[greet] ${err.message}，只用 /msg 打招呼`) }
+  const serverName = env.MC_SERVER_NAME || ''
   const greeted = new Map()
   let readyAt = Infinity
   let queue = Promise.resolve()
 
-  const consoleCmd = (command) => new Promise((resolve, reject) => {
-    execFile('/usr/bin/python3', [ctl, '--world', world, 'console', command], { timeout: 10_000 },
-      (err) => (err ? reject(err) : resolve()))
-  })
-
   async function greet(name) {
     const online = Object.keys(bot.players).filter((n) => n !== bot.username).length
     try {
-      for (const cmd of greetingCommands(name, bot.username, { online })) await consoleCmd(cmd)
+      if (!run) throw new Error('没配置 MC_RCON_PASSWORD 或 MC_CTL')
+      await run(greetingCommands(name, bot.username, { online, serverName }))
       ctx.log(`[greet] ${name}（特效）`)
     } catch (err) {
       ctx.log(`[greet] 控制台不可用，改用 /msg: ${err.message.split('\n')[0]}`)
@@ -98,4 +123,4 @@ function createGreeter(bot, ctx) {
   return { greet }
 }
 
-module.exports = { createGreeter, greetingCommands }
+module.exports = { createGreeter, greetingCommands, consoleFrom }

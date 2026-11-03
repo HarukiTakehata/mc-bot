@@ -1,5 +1,6 @@
 // 轻量 Minecraft 机器人：无画面，只走网络协议。
-// 用法：MC_HOST=127.0.0.1 MC_PORT=25565 MC_NAME=Claude_Bot MC_VERSION=26.1 node bot.js
+// 用法：MC_HOST=127.0.0.1 MC_PORT=25565 MC_NAME=Claude_Bot node bot.js（MC_VERSION 不填就自动检测服务器版本）
+// 原版、Paper/Spigot、Fabric 服都能进；模组支持见 mods/ 和 extensions/（README 的“模组扩展”一节）
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
 const Move = require('mineflayer-pathfinder/lib/move')
@@ -29,18 +30,31 @@ const { createExplorer } = require('./explore')
 const { createBuilder } = require('./build')
 const { createRedstone } = require('./redstone')
 const { createParkour } = require('./parkour')
-const { relevantTips, modTipFor } = require('./knowledge')
+const { relevantTips, modTipFor, useMods } = require('./knowledge')
+const { createMods } = require('./mods')
+const { loadWorkflows, createRunner } = require('./workflows')
+const { createAgentApi, createEventLog } = require('./agent-api')
 const { Vec3 } = require('vec3')
-const { getCommand, safeChatChunks, normalizeAction, AI_ACTIONS, createRateLimiter } = require('./security')
+const { getCommand, safeChatChunks, normalizeAction, normalizeExtensionArgs, AI_ACTIONS, createRateLimiter } = require('./security')
 const path = require('path')
 const { readJSON, writeJSON } = require('./storage')
 console.log(`[startup] mc-bot ${require('./package.json').version}`)
+// config.json（可选）：写错了直接退出并说清楚哪里错，别带着半套配置跑
+try {
+  const applied = require('./config').loadConfig({ env: process.env })
+  if (applied.length) console.log(`[config] 从 config.json 读了 ${applied.join(', ')}`)
+} catch (err) { console.log(`[config] ${err.message}`); process.exit(78) }
 const runtime = createRuntime({ onTimeout: () => { stopAll('timeout'); say(flight?.active() ? '任务超时，取消航线并尝试降落' : '任务超时，已停止后续动作') } })
 let flight = null
 let autoTravel = null
 let parkour = null
 
-const VERSION = process.env.MC_VERSION || '26.1'
+// 留空 = 连上前先 ping 服务器拿版本。完整验证过的只有 26.1，其他版本能进服，但部分修正（鞘翅、附魔、挖掘时间）不生效
+const VERSION = process.env.MC_VERSION || false
+const TESTED_VERSIONS = new Set(['26.1', '26.1.1', '26.1.2'])
+const mods = createMods({ enable: process.env.MC_MODS, disable: process.env.MC_MODS_DISABLE })
+useMods(mods)
+const agentEvents = createEventLog() // 给 Agent API / MCP 的事件流
 
 const bot = mineflayer.createBot({
   host: process.env.MC_HOST || '127.0.0.1',
@@ -54,7 +68,15 @@ const bot = mineflayer.createBot({
   hideErrors: true, // 下面的 error 监听已记一行；默认还会再打整段堆栈，服务器关着时每次重启刷十几行
 })
 
-setupFabric(bot, VERSION)
+// Fabric 服在配置阶段同步注册表：按里面出现的命名空间启用模组扩展，并给模组物品组件登记编码
+setupFabric(bot, { version: VERSION || undefined, onRegistries: (namespaces) => { mods.activate(namespaces); return mods.componentCodecs() } })
+bot.once('login', () => {
+  mods.activate(null) // 非 Fabric 服没有注册表：只启用 always 和 MC_MODS 点名的
+  console.log(`[startup] 游戏版本 ${bot.version}${TESTED_VERSIONS.has(bot.version) ? '' : '（未完整验证：鞘翅自动飞行关闭，其他功能可能有偏差）'}`)
+  mods.setupAll({ bot, registerCommand: registerExtensionCommand, ctx: { say, sleepMs } })
+  loadAllWorkflows() // 扩展指令注册完再读，工作流里可以用它们
+  startAgentApi()
+})
 bot.setMaxListeners(50) // pathfinder 挖掘时重置路径会临时多挂监听器
 
 // pathfinder 在"准备挖但还没开挖"时每次重置路径都会再挂一遍同一个监听器，
@@ -103,6 +125,7 @@ const say = (msg) => {
   const chunks = safeChatChunks(msg)
   const text = chunks.join(' ')
   sayLog?.push(text)
+  agentEvents.push('say', { text: text.slice(0, 600), to: replyStore.getStore() || null })
   const whisperTo = replyStore.getStore()
   for (const chunk of chunks) sendChat(whisperTo ? `/msg ${whisperTo} ${chunk}` : chunk)
 }
@@ -317,6 +340,7 @@ async function runTask(name, fn, options = {}) {
   post = null
   try {
     console.log(`[task] start ${name}`)
+    agentEvents.push('task', { state: 'start', name })
     return await runtime.runTask(name, async () => {
       bot.pathfinder.setGoal(null) // setMovements 本身不会移除旧的动态跟随目标。
       bot.pathfinder.setMovements(options.safe ? safeMoves : workMoves)
@@ -330,6 +354,7 @@ async function runTask(name, fn, options = {}) {
     return { ok: false, error: err.message }
   } finally {
     console.log(`[task] end ${name} cancelled=${generation !== runtime.generation()}`)
+    agentEvents.push('task', { state: 'end', name, cancelled: generation !== runtime.generation() })
     // 超过 40 秒的活，做完点名告诉下指令的人（不然玩家不知道它忙完了）
     if (generation === runtime.generation() && requester && Date.now() - startedAt > 40_000) {
       runtime.unscoped(() => say(`${requester}，「${name}」这件事结束了（结果见上面），还有什么要我做的？`))
@@ -534,6 +559,7 @@ async function mineIds(ids, count, maxDistance = 32) {
     .some(([x, y, z]) => bot.blockAt(p.offset(x, y, z))?.type === lava)
   // 水下挖慢 5 倍、浮着再慢 5 倍，木镐一块石头接近 30 秒，撞上单块超时（出生点水坑实测）：挨着水的放到最后再挖
   const wet = (p) => [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, 0, 1], [0, 0, -1]].some(([x, y, z]) => isWaterCell(bot.blockAt(p.offset(x, y, z))))
+  let swam = false
   const bad = new Set() // 日志：同一个够不着的方块会被反复选中直到 3 次失败，失败过的就跳过换下一个
   // 连锁采集类模组一次掉一堆（实测：chop 4 报 4，背包里 18 个原木）：能按物品名对上的以背包增量为准
   const names = new Set(ids.map((id) => bot.registry.blocks[id]?.name))
@@ -563,7 +589,12 @@ async function mineIds(ids, count, maxDistance = 32) {
       }
       // 自卫打架会抢走寻路目标，等打完再继续；其他失败最多忍 5 次，这块够不着就换下一块
       if (combat.active()) await combat.waitOver()
-      else { misses++; bad.add(pos.toString()) }
+      else {
+        misses++; bad.add(pos.toString())
+        // 漂在深水里不许挖放（会越挖越深），够不着岸边的方块就一直放弃（版本矩阵 1.19.4 实测：4 块各等 32 秒）。先游上岸再挑
+        const feet = bot.entity.position.floored()
+        if (!swam && bot.entity.isInWater && bot.blockAt(feet.offset(0, -1, 0))?.boundingBox !== 'block') { swam = true; await leaveWater(pos) }
+      }
     }
   }
   await inventorySettled()
@@ -887,7 +918,7 @@ const HELP = [
   'bot come / follow / stay / stop / goto x y z / pos / hp / look',
   'bot mine <方块> [数量] (铁/煤/钻石/stone...) / chop [数量] / pickup',
   'bot inv / drop <物品> [数量] / craft <物品> [数量] / sleep / eat / guard on|off / auto on|off / say <内容>',
-  '其他 "bot 随便说什么" 会交给 DeepSeek，比如: bot 帮我做一把石镐',
+  '其他 "bot 随便说什么" 会交给 AI，比如: bot 帮我做一把石镐；bot workflows 看工作流',
 ]
 const commands = {
   help: () => HELP.forEach((line, i) => setTimeout(() => say(line), i * 300)),
@@ -1344,10 +1375,34 @@ HELP.push('建筑: bot build <tower/wall/floor/stairs/pyramid> [m=材料] [at=x,
 HELP.push('红石: bot circuit <lamp/not/or/and/memory/gate/autodoor/clock/fastclock/nightlight/dropbox> / wire / use [x y z] / door open|close / repeater / rs / rstrace / rsdiag；跑酷: bot parkour x y z / parkour check x y z')
 HELP.push('bot get <物品> [数量]（自动挖/烧/合成）/ plan <物品> / farm [半径] / breed <动物> / shear / milk / fish [次数] / tunnel [长度] [东南西北] / digdown [深度] / excavate 方块[,方块] [r=半径] [above=y] [below=y] [max=数量] / torch / explore <方块> / dump')
 
-// ---- DeepSeek：不是固定指令的 "bot ..." 就交给 AI 理解 ----
-const ai = process.env.DEEPSEEK_API_KEY
-  ? createAI({ apiKey: process.env.DEEPSEEK_API_KEY, model: process.env.DEEPSEEK_MODEL, thinking: process.env.DEEPSEEK_THINKING !== 'off', getName: () => bot.username })
-  : null
+// ---- AI：不是固定指令的 "bot ..." 就交给 AI 理解（AI_PROVIDER 选后端；external = 交给外部 agent）----
+const AI_PROVIDER = String(process.env.AI_PROVIDER || 'deepseek').toLowerCase()
+const EXTERNAL_AGENT = AI_PROVIDER === 'external'
+function makeAI() {
+  if (AI_PROVIDER === 'off' || EXTERNAL_AGENT) return null
+  const key = process.env.AI_API_KEY || { deepseek: process.env.DEEPSEEK_API_KEY, openai: process.env.OPENAI_API_KEY, anthropic: process.env.ANTHROPIC_API_KEY }[AI_PROVIDER]
+  const baseUrl = process.env.AI_BASE_URL || undefined
+  if (!key && !(AI_PROVIDER === 'openai' && baseUrl)) return null
+  try {
+    const made = createAI({
+      provider: AI_PROVIDER, apiKey: key, baseUrl,
+      model: process.env.AI_MODEL || (AI_PROVIDER === 'deepseek' ? process.env.DEEPSEEK_MODEL : undefined) || undefined,
+      jsonMode: process.env.AI_JSON_MODE !== 'off', fallbacks: process.env.AI_FALLBACKS !== 'off',
+      thinking: (process.env.AI_THINKING || process.env.DEEPSEEK_THINKING) !== 'off',
+      limits: { perMinute: process.env.AI_RPM, perHour: process.env.AI_RPH },
+      getName: () => bot.username, getServerNotes: () => [mods.promptNotes(), workflowPromptNotes()].filter(Boolean).join('\n'),
+    })
+    console.log(`[ai] 后端 ${AI_PROVIDER}${process.env.AI_MODEL ? ` / ${process.env.AI_MODEL}` : ''}`)
+    return made
+  } catch (err) { console.log(`[ai] AI 配置不对，只认固定指令: ${err.message}`); return null }
+}
+const ai = makeAI()
+// 外部 agent 模式：自然语言请求变成事件，由连着 Agent API / MCP 的程序处理
+function handOff(user, text) {
+  agentEvents.push('request', { user: user ?? null, text: String(text).slice(0, 500) })
+  if (user) say(`${user}，收到，交给外部 agent 处理`)
+  return { error: true, code: 'EXTERNAL' }
+}
 commands.status = () => {
   const current = runtime.status()
   const stats = ai?.statistics()
@@ -1437,9 +1492,9 @@ function nearbyPlayers() {
 function itemKnowledge() {
   const names = [...new Set(bot.inventory.items().map((i) => i.name).filter(Boolean))]
   const learned = explorer.notesFor(names)
-  const mods = [...new Set(names.filter((n) => n.includes(':')).map((n) => modTipFor(n)).filter(Boolean))].slice(0, 2)
+  const modTips = [...new Set(names.filter((n) => n.includes(':')).map((n) => modTipFor(n)).filter(Boolean))].slice(0, 2)
   const unknown = names.filter((n) => n.includes(':') && !modTipFor(n) && !learned.some((l) => l.startsWith(n))).slice(0, 4)
-  return [...learned, ...mods, unknown.length && `没研究过的模组物品(可 inspect/try): ${unknown.join(',')}`].filter(Boolean).join('；').slice(0, 800)
+  return [...learned, ...modTips, unknown.length && `没研究过的模组物品(可 inspect/try): ${unknown.join(',')}`].filter(Boolean).join('；').slice(0, 800)
 }
 function nearbyEntities() {
   const counts = {}
@@ -1454,7 +1509,7 @@ function nearbyEntities() {
 let aiWork = false
 // 返回 { done, log, failed, plan, check } / { error, code, waitMs } / { stopped }
 async function talkToAI(user, message, rounds = 3, { effort = 'high', intent = message } = {}) {
-  if (!ai) { say('没配置 DeepSeek，只认固定指令，试试 bot help'); return { error: true } }
+  if (!ai) { if (EXTERNAL_AGENT) return handOff(user, message); say('没配置 AI，只认固定指令，试试 bot help'); return { error: true } }
   if (aiWork || runtime.busy() || flight?.active()) { say('上一个任务还在执行或收尾，请稍等'); return { error: true } }
   aiWork = true
   const requestedRun = actionRun
@@ -1535,7 +1590,8 @@ async function talkRound(user, message, rounds, { forceWalk = false, forceFly = 
     if (task && cmd !== 'stop') await waitIdle()
     runtime.assertActive()
     // 玩家明确说了要飞：不让交通选择改成走路（实测：“飞回去”走了路，玩家只好手动 fly）。烟花由玩家这句话授权
-    const fn = getCommand(commands, forceFly && ['goto', 'go'].includes(cmd) ? 'fly' : cmd)
+    // AI 只能跑开放给它的工作流（ai: true）
+    const fn = cmd === 'run' ? (u, a) => runWorkflow(a[0], u, { byAI: true }) : getCommand(commands, forceFly && ['goto', 'go'].includes(cmd) ? 'fly' : cmd)
     if (!fn) throw new Error('动作未注册')
     const said = []
     sayLog = said
@@ -1745,7 +1801,7 @@ async function runGoal(text, starter, resumed = null, maxRounds = GOAL_ROUNDS, l
 commands.goal = (user, args) => {
   if (!args.length) return say(goal ? `当前目标: ${goal.label || goal.text}（第 ${goal.rounds} 轮）${goal.plan.length ? ' 计划: ' + goal.plan.join(' → ') : ''}` : '没有目标。用法: bot goal <目标> / bot goal stop')
   if (args[0] === 'stop') { stopAll(); return runtime.unscoped(() => say('目标取消')) }
-  if (!ai) return say('没配置 DeepSeek，用不了长期目标')
+  if (!ai) return say('没配置 AI，用不了长期目标')
   if (goal) return say(`已经有目标: ${goal.label || goal.text}，先 bot goal stop`)
   say(`收到目标: ${args.join(' ')}`)
   runGoal(args.join(' '), user).catch((err) => console.log('[goal]', err.message)) // 不阻塞聊天处理
@@ -1860,12 +1916,33 @@ async function waitIdle() {
 const inputLimit = createRateLimiter({ limit: 8, windowMs: 10_000 })
 const globalInputLimit = createRateLimiter({ limit: 80, windowMs: 60_000 })
 const limitNotice = createRateLimiter({ limit: 1, windowMs: 10_000 })
-const REPLANNABLE = new Set([...AI_ACTIONS].filter((c) => !['walk', 'plan', 'note', 'guard', 'stop', 'stay', 'follow', 'mark', 'inspect', 'tip', 'try', 'rs', 'rstrace', 'rsdiag', 'materials', 'blueprints'].includes(c)))
-const readCommands = new Set(['help', 'status', 'pos', 'hp', 'look', 'inv', 'places', 'scan', 'advice', 'lastdeath', 'plan', 'inspect', 'tip', 'rs', 'rstrace', 'rsdiag', 'materials', 'blueprints'])
+const REPLANNABLE = new Set([...AI_ACTIONS].filter((c) => !['run', 'walk', 'plan', 'note', 'guard', 'stop', 'stay', 'follow', 'mark', 'inspect', 'tip', 'try', 'rs', 'rstrace', 'rsdiag', 'materials', 'blueprints'].includes(c)))
+const readCommands = new Set(['workflows', 'help', 'status', 'pos', 'hp', 'look', 'inv', 'places', 'scan', 'advice', 'lastdeath', 'plan', 'inspect', 'tip', 'rs', 'rstrace', 'rsdiag', 'materials', 'blueprints'])
+// .js 模组扩展注册的指令：只能玩家直接下（AI 调不到），不能和已有指令重名；干活类走 runTask，bot stop 能停、有超时
+const extensionCommands = new Map()
+function registerExtensionCommand(name, spec) {
+  if (getCommand(commands, name) || extensionCommands.has(name)) throw new Error(`指令 ${name} 已经存在`)
+  extensionCommands.set(name, spec)
+  commands[name] = spec.read
+    ? (user, args) => spec.run(user, args)
+    : (user, args) => runTask(`${name}（${spec.id}）`, () => spec.run(user, args))
+  if (spec.help && HELP.length < 10) HELP.push(`bot ${name}: ${spec.help}（扩展 ${spec.id}）`) // help 一行一条，别刷屏
+  console.log(`[mods:${spec.id}] 注册指令 bot ${name}`)
+}
+// 唤醒词：bot 一直有效，MC_PREFIX 可以再加最多 4 个（比如 cb,小助手）
+const PREFIXES = ['bot', ...String(process.env.MC_PREFIX || '').split(',').map((p) => p.trim()).filter((p) => {
+  if (!p || p.toLowerCase() === 'bot') return false
+  if (/^[A-Za-z\p{Script=Han}][\w\p{Script=Han}]{0,11}$/u.test(p)) return true
+  console.log(`[config] 忽略不合法的唤醒词 ${p.slice(0, 16)}`)
+  return false
+}).slice(0, 4)]
+const PREFIX_RE = new RegExp(`^(?:${PREFIXES.join('|')})\\s+`, 'iu') // 唤醒词只含字母数字汉字下划线，不用转义
 function handleChat(user, message, { whisper = false } = {}) {
   Promise.resolve().then(() => {
     if (user === bot.username || typeof message !== 'string') return
-    const m = message.trim().match(/^bot\s+(\S+)\s*(.*)$/i)
+    const head = PREFIX_RE.exec(message.trim())
+    const body = head ? message.trim().slice(head[0].length) : ''
+    const m = head && body.match(/^(\S+)\s*(.*)$/s)
     if (!m) return mentioned(user, message)
     if (message.length > 1000) return say('指令太长了')
     const name = m[1].toLowerCase()
@@ -1878,10 +1955,10 @@ function handleChat(user, message, { whisper = false } = {}) {
     }
     if (!safeMoves || !bot.entity) return say('还没准备好，请等进服后再试')
     console.log(`[command] user=${String(user).slice(0, 32)} cmd=${name.slice(0, 32)}`)
-    const reading = readCommands.has(name) || (['mode', 'note', 'goal'].includes(name) && !args.length)
-    if (!stopping && !reading && (runtime.busy() || aiWork || goal || flight?.active())) {
+    const reading = readCommands.has(name) || !!extensionCommands.get(name)?.read || (['mode', 'note', 'goal'].includes(name) && !args.length)
+    if (!stopping && !reading && (runtime.busy() || aiWork || goal || flight?.active() || workflowActive)) {
       // 不是固定指令的自然语言才走这里：固定指令照旧排队
-      if (!getCommand(commands, name) && whileBusy(user, message.trim().slice(4))) return
+      if (!getCommand(commands, name) && whileBusy(user, body)) return
       // 忙的时候不拒绝，排队（最多 3 条），手上的做完就接着做
       if (queue.length >= 3) return say('排队的指令已经有 3 条了，等等或 bot stop 清空')
       queue.push({ user, message })
@@ -1893,11 +1970,11 @@ function handleChat(user, message, { whisper = false } = {}) {
     if (fn) {
       let checked
       try {
-        checked = normalizeAction(name, args)
+        checked = extensionCommands.has(name) ? { cmd: name, args: normalizeExtensionArgs(args) } : normalizeAction(name, args)
       } catch (err) {
         // "bot come here"、"bot come 到我这" 这类口语带了多余参数：交给 AI 理解，别直接报错
         if (err.code !== 'INVALID_ACTION' || !ai || stopping) throw err
-        return runtime.scope(() => instruct(user, message.trim().slice(4)))
+        return runtime.scope(() => instruct(user, body))
       }
       if (stopping) return runtime.unscoped(() => fn(user, checked.args))
       if (reading && whisper && /^[A-Za-z0-9_]{1,16}$/.test(user)) return replyStore.run(user, () => runtime.scope(() => fn(user, checked.args)))
@@ -1911,7 +1988,7 @@ function handleChat(user, message, { whisper = false } = {}) {
       })
     }
     if (['__proto__', 'constructor', 'prototype', 'tostring', 'valueof'].includes(name)) return say('不支持这个指令')
-    return runtime.scope(() => instruct(user, message.trim().slice(4)))
+    return runtime.scope(() => instruct(user, body))
   }).catch((err) => {
     if (err instanceof CancelledError) return
     console.log(`[command] ${err.name}: ${err.message}`)
@@ -1919,16 +1996,17 @@ function handleChat(user, message, { whisper = false } = {}) {
   })
 }
 bot.on('chat', handleChat)
+bot.on('chat', (user, message) => { if (user !== bot.username && typeof message === 'string') agentEvents.push('chat', { user: String(user).slice(0, 32), text: message.slice(0, 300) }) })
 // 私聊不用加 bot 前缀
 bot.on('whisper', (user, message) => {
   if (user === bot.username || typeof message !== 'string') return
-  handleChat(user, /^bot\s/i.test(message.trim()) ? message : `bot ${message}`, { whisper: true })
+  handleChat(user, PREFIX_RE.test(message.trim()) ? message : `bot ${message}`, { whisper: true })
 })
 
 // ---- 排队：忙时收到的指令，空闲后按顺序执行 ----
 const queue = []
 setInterval(() => {
-  if (!queue.length || runtime.busy() || aiWork || goal || flight?.active() || !bot.entity) return
+  if (!queue.length || runtime.busy() || aiWork || goal || flight?.active() || workflowActive || !bot.entity) return
   const next = queue.shift()
   handleChat(next.user, next.message)
 }, 1000)
@@ -1945,15 +2023,23 @@ function mentioned(user, message) {
     if (whileBusy(user, text.replace(new RegExp(bot.username, 'ig'), '').trim())) return
     return say(`${user}，我在${task ? `「${task}」` : goal ? `做目标「${goal.label || goal.text}」` : '忙'}，要我做事就说 bot 加指令，会排队；急事 bot stop`)
   }
-  if (!ai) return say(`${user}，在呢！说 bot help 看我能做什么`)
+  if (!ai) return EXTERNAL_AGENT ? handOff(user, text) : say(`${user}，在呢！说 bot help 看我能做什么`)
   currentRequester = String(user).slice(0, 32)
   return runtime.scope(() => instruct(user, `[玩家在聊天里叫到你，没加 bot 前缀] ${text}`))
 }
 
+bot.on('death', () => agentEvents.push('death', { position: bot.entity?.position && fmt(bot.entity.position) }))
 bot.on('death', () => { flight?.dispose('death'); stopAll('death'); say('我挂了…可用 bot lastdeath 查看坐标') })
 bot.on('messagestr', (msg) => { if (msg.startsWith(bot.username + ' ')) console.log('[server]', msg) })
 bot.on('kicked', (reason) => console.log('[kicked]', JSON.stringify(reason)))
-bot.on('error', (err) => console.log('[error]', err.message))
+bot.on('error', (err) => {
+  console.log('[error]', err.message)
+  // 服务器版本比 mineflayer 支持的新/旧：说清楚，别让人以为是网络问题
+  if (/unsupported protocol version|not supported|version .* is not supported/i.test(err.message)) {
+    const { latestSupportedVersion: newest, oldestSupportedVersion: oldest } = require('mineflayer/lib/version')
+    console.log(`[startup] 服务器版本不在支持范围（${oldest} ~ ${newest}）。更新 mineflayer（npm update mineflayer minecraft-data），或让服务器装 ViaVersion 兼容旧客户端，再用 MC_VERSION=${newest}`)
+  }
+})
 bot.on('end', (reason) => { flight?.dispose('disconnect'); companion.dispose(); console.log('[end]', reason); exitForRetry(0) })
 let shuttingDown = false
 async function shutdown() {
@@ -1974,6 +2060,164 @@ const RETRY_FILE = path.join(__dirname, 'data', 'reconnect.json')
 let spawned = false
 const saveFailures = (failures) => { try { writeJSON(RETRY_FILE, { failures }) } catch (err) { console.log('[reconnect]', err.message) } }
 let exiting = false
+// ---- 自定义工作流（workflows/*.json）----
+let workflows = new Map()
+let workflowActive = null
+const workflowRuns = new Map() // id → 上次开始的时间（冷却）
+function loadAllWorkflows() {
+  workflows = loadWorkflows(process.env.MC_WORKFLOWS_DIR || path.join(__dirname, 'workflows'), { extensionCommands })
+  if (workflows.size) console.log(`[workflow] 载入 ${[...workflows.keys()].join(', ')}`)
+}
+function workflowPromptNotes() {
+  const open = [...workflows.values()].filter((w) => w.ai)
+  return open.length ? `可用工作流（run 名字 调用，一次做完一串事）：${open.map((w) => `${w.id}${w.description ? `（${w.description}）` : ''}`).join('；')}`.slice(0, 600) : ''
+}
+function inventoryCount(name) {
+  return bot.inventory.items().filter((i) => i.name === name).reduce((n, i) => n + i.count, 0)
+}
+const isNight = () => { const t = bot.time?.timeOfDay ?? 0; return t >= 13000 && t < 23000 }
+// 执行一条指令并判断成败（和 AI 动作同一套判断）
+async function execStep(user, cmd, args) {
+  if (task) await waitIdle()
+  const fn = getCommand(commands, cmd)
+  if (!fn) return { ok: false, error: `没有指令 ${cmd}` }
+  const said = []
+  const outer = sayLog // AI 调用工作流时外层也在记录，做完要还回去
+  sayLog = said
+  let outcome
+  try { outcome = await fn(user, args) } finally { if (sayLog === said) sayLog = outer; outer?.push(...said) }
+  if (outcome?.stopped) return { ok: false, stopped: true, said }
+  const bad = outcome?.kind === 'travel' ? !outcome.ok : outcome?.ok === false || said.some((l) => FAILURE.test(l))
+  return { ok: !bad, error: bad ? String(outcome?.error || said.join('；')).slice(0, 160) : undefined, said }
+}
+async function runWorkflow(id, user = null, { byAI = false } = {}) {
+  const wf = workflows.get(id)
+  if (!wf) { say(`没有工作流 ${id}，bot workflows 看有哪些`); return { ok: false, error: `没有工作流 ${id}` } }
+  if (byAI && !wf.ai) return { ok: false, error: `工作流 ${id} 没开放给 AI（文件里写 "ai": true 才行）` }
+  if (workflowActive) { say(`工作流「${workflowActive}」还在跑`); return { ok: false, error: 'busy' } }
+  workflowActive = id
+  workflowRuns.set(id, Date.now())
+  const run = actionRun
+  agentEvents.push('workflow', { id, state: 'start', user })
+  console.log(`[workflow] start ${id}`)
+  say(`开始工作流「${wf.name}」`)
+  const runner = createRunner({
+    exec: (cmd, args) => execStep(user, cmd, args),
+    ask: async (text) => {
+      if (!ai) return { ok: false, error: '没配置 AI' }
+      const res = await talkToAI(user, text)
+      return { ok: !!res && !res.error && !res.stopped && !res.failed, stopped: !!res?.stopped }
+    },
+    say, sleep: sleepMs, inventoryCount, isNight, health: () => bot.health, food: () => bot.food,
+    isCancelled: () => run !== actionRun || !runtime.isActive(),
+  })
+  try {
+    const result = await runtime.scope(() => runner(wf))
+    if (!result.stopped) say(`工作流「${wf.name}」${result.ok ? '做完了' : `没做完：${result.failures.join('；') || result.error}`}`.slice(0, 240))
+    return result
+  } catch (err) {
+    if (err instanceof CancelledError || run !== actionRun) return { ok: false, stopped: true }
+    say(`工作流「${wf.name}」出错：${err.message}`)
+    return { ok: false, error: err.message }
+  } finally {
+    console.log(`[workflow] end ${id}`)
+    agentEvents.push('workflow', { id, state: 'end' })
+    if (workflowActive === id) workflowActive = null
+  }
+}
+commands.run = (user, [id]) => runWorkflow(id, user)
+commands.workflows = () => {
+  if (!workflows.size) return say('还没有工作流：在 workflows/ 放 .json，写法见 README')
+  say([...workflows.values()].map((w) => `${w.id}${w.trigger.on === 'manual' ? '' : `[${w.trigger.on}]`}${w.ai ? '[AI]' : ''}: ${w.description || w.name}`).join('；'))
+}
+// 自动触发：只在完全空闲时，每种触发看冷却
+let lastBusyAt = Date.now()
+let workflowWasNight = null
+function triggerWorkflows(kind) {
+  if (process.env.MC_WORKFLOWS_AUTO === 'off' || workflowActive || !bot.entity) return
+  if (runtime.busy() || aiWork || goal || flight?.active() || task || followTarget || post || queue.length) return
+  const now = Date.now()
+  for (const wf of workflows.values()) {
+    if (wf.trigger.on !== kind) continue
+    const gap = (kind === 'interval' ? wf.trigger.every : wf.trigger.cooldown) * 1000
+    if (now - (workflowRuns.get(wf.id) ?? -Infinity) < gap) continue
+    console.log(`[workflow] 自动触发 ${wf.id}（${kind}）`)
+    runtime.unscoped(() => runWorkflow(wf.id, null)).catch((err) => console.log('[workflow]', err.message))
+    return
+  }
+}
+bot.on('spawn', () => {
+  for (const wf of workflows.values()) if (wf.trigger.on === 'interval' && !workflowRuns.has(wf.id)) workflowRuns.set(wf.id, Date.now())
+  setTimeout(() => triggerWorkflows('spawn'), 10_000)
+})
+bot.on('playerJoined', (p) => { if (p?.username !== bot.username) setTimeout(() => triggerWorkflows('playerJoined'), 8000) })
+setInterval(() => {
+  if (!bot.entity) return
+  if (runtime.busy() || aiWork || goal || task || workflowActive) lastBusyAt = Date.now()
+  const night = isNight()
+  if (workflowWasNight !== null && night !== workflowWasNight) triggerWorkflows(night ? 'night' : 'day')
+  workflowWasNight = night
+  if (Date.now() - lastBusyAt > 60_000) triggerWorkflows('idle')
+  triggerWorkflows('interval')
+}, 15_000).unref?.()
+
+// ---- 本机 Agent API（MC_AGENT_PORT + MC_AGENT_TOKEN）----
+const USERNAME_RE = /^[A-Za-z0-9_]{1,16}$/
+const busyReason = () => workflowActive ? `工作流 ${workflowActive}` : goal ? `目标 ${goal.label || goal.text}` : task || (aiWork ? 'AI 思考中' : flight?.active() ? '飞行中' : null)
+let agentApi = null
+function startAgentApi() {
+  if (agentApi || !process.env.MC_AGENT_PORT) return
+  try {
+    agentApi = createAgentApi({
+      port: Number(process.env.MC_AGENT_PORT), host: process.env.MC_AGENT_HOST || '127.0.0.1', token: process.env.MC_AGENT_TOKEN, events: agentEvents,
+      handlers: {
+        state: () => ({
+          username: bot.username, version: bot.version, brand: bot.game?.serverBrand || null, dimension: bot.game?.dimension,
+          position: bot.entity && { x: +bot.entity.position.x.toFixed(1), y: +bot.entity.position.y.toFixed(1), z: +bot.entity.position.z.toFixed(1) },
+          health: bot.health, food: bot.food, night: isNight(), busy: busyReason(), queue: queue.length,
+          inventory: bot.inventory.items().map((i) => ({ name: i.name, count: i.count })),
+          players: Object.values(bot.players).filter((p) => p.username !== bot.username).map((p) => ({ name: p.username, distance: p.entity ? +p.entity.position.distanceTo(bot.entity.position).toFixed(1) : null })),
+          ai: ai ? AI_PROVIDER : EXTERNAL_AGENT ? 'external' : null, mods: mods.active().map((d) => d.id), workflows: [...workflows.keys()],
+        }),
+        commands: () => ({ ai: [...AI_ACTIONS].sort(), help: HELP, extensions: [...extensionCommands].map(([name, x]) => ({ name, help: x.help, read: x.read, extension: x.id })) }),
+        command: async ({ cmd, args, wait, as }) => {
+          cmd = String(cmd).toLowerCase()
+          if (as !== undefined && (!USERNAME_RE.test(String(as)) || !bot.players[as])) throw Object.assign(new Error('as 必须是在线玩家名'), { status: 400 })
+          const user = as || null
+          const fn = getCommand(commands, cmd)
+          if (!fn) throw Object.assign(new Error(`没有指令 ${cmd.slice(0, 32)}`), { status: 404 })
+          const checked = extensionCommands.has(cmd) ? { args: normalizeExtensionArgs(args) } : normalizeAction(cmd, args)
+          if (cmd === 'stop') { runtime.unscoped(() => fn(user, [])); return { ok: true } }
+          const reading = readCommands.has(cmd) || !!extensionCommands.get(cmd)?.read
+          if (!reading && busyReason()) throw Object.assign(new Error(`机器人正忙（${busyReason()}），先 stop 或等它做完`), { status: 409 })
+          currentRequester = user || 'agent'
+          console.log(`[agent] cmd=${cmd}`)
+          const pending = runtime.scope(() => execStep(user, cmd, checked.args))
+          if (!wait) { pending.catch(() => {}); return { accepted: true } }
+          return pending
+        },
+        say: (text) => { runtime.unscoped(() => say(text)); return { ok: true } },
+        ask: async (text) => {
+          if (!ai) throw Object.assign(new Error(EXTERNAL_AGENT ? '外部 agent 模式没有内置 AI，你就是那个 agent' : '没配置内置 AI'), { status: 400 })
+          if (busyReason()) throw Object.assign(new Error(`机器人正忙（${busyReason()}）`), { status: 409 })
+          const said = []
+          sayLog = said
+          let res
+          try { res = await runtime.scope(() => instruct(null, text)) } finally { if (sayLog === said) sayLog = null }
+          return { ok: !!res && !res.error && !res.stopped, said, log: res?.log || [], goal: goal ? goal.label || goal.text : null }
+        },
+        stop: () => { runtime.unscoped(() => commands.stop(null, [])); return { ok: true } },
+        workflows: () => [...workflows.values()].map(({ id, name, description, ai: open, trigger, size }) => ({ id, name, description, ai: open, trigger, steps: size })),
+        runWorkflow: async (id) => {
+          if (!workflows.has(id)) throw Object.assign(new Error(`没有工作流 ${id}`), { status: 404 })
+          if (busyReason()) throw Object.assign(new Error(`机器人正忙（${busyReason()}）`), { status: 409 })
+          return runWorkflow(id, null)
+        },
+      },
+    })
+  } catch (err) { console.log(`[agent] ${err.message}`) }
+}
+
 function exitForRetry(code) {
   if (exiting) return
   exiting = true

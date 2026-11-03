@@ -1,0 +1,13 @@
+{
+  "id": "my-mod",
+  "name": "示例：给一个模组写说明和组件编码",
+  "namespaces": ["mymod"],
+  "summary": "MyMod：这里写一句话说明，AI 看到背包里有 mymod:xxx 物品时会带上它",
+  "components": {
+    "mymod:charge": "varint"
+  },
+  "tips": [
+    { "keys": ["mymod", "充能"], "text": "MyMod 的机器要先充能再右键使用" }
+  ],
+  "prompt": "本服装了 MyMod：它的机器别拆"
+}

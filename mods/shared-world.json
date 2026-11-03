@@ -1,0 +1,9 @@
+{
+  "id": "shared-world",
+  "name": "共享背包和血量（sharedinv / sharedhealth）",
+  "activate": "manual",
+  "features": { "sharedInventory": true, "sharedHealth": true },
+  "tips": [
+    { "keys": ["共享", "sharedinv", "sharedhealth", "背包", "血量"], "text": "本服所有人共享背包和血量：谁拿走东西大家都没了，一个人掉血全队掉血，危险操作先商量" }
+  ]
+}

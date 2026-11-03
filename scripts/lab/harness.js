@@ -5,6 +5,7 @@ const { spawn, spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
 const { setupFabric } = require('../../fabric')
+const { createMods } = require('../../mods')
 
 const LAB = process.env.LAB_CONTAINER || 'luomo-mcbot-cap-lab-20261030'
 const PORT = 25577
@@ -50,7 +51,8 @@ function createLab({ ai = false, fakeAI = false, viewDistance = 'short' } = {}) 
 
   lab.startTester = async () => {
     const t = mineflayer.createBot({ host: '127.0.0.1', port: PORT, username: TESTER, auth: 'offline', version: '26.1', viewDistance: 'short' })
-    setupFabric(t, '26.1')
+    const testerMods = createMods({ log: () => {} })
+    setupFabric(t, { version: '26.1', onRegistries: (ns) => { testerMods.activate(ns); return testerMods.componentCodecs() } })
     t.on('error', (err) => { lab.log += `[tester] ${err.message}\n` })
     t.on('chat', (u, text) => { if (u === NAME) lab.chat.push({ at: Date.now(), text }) })
     t.on('whisper', (u, text) => { if (u === NAME) lab.chat.push({ at: Date.now(), text }) })

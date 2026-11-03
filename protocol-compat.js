@@ -2,8 +2,13 @@
 // 只在明确核对的26.1协议上适配本bot，不修改node_modules或全局注册表。
 const minecraftData = require('minecraft-data')
 const INSTALLED = Symbol('mc26ActionCompatibility')
+// 贴墙卡住、附魔读法是物理库/物品库的问题，与版本无关，所有版本都装；鞘翅动作名映射只在核对过的 26.1 上改
 function installProtocolCompat(bot) {
-  if (!['26.1', '26.1.2'].includes(bot.version) || bot[INSTALLED]) return false
+  if (bot[INSTALLED]) return false
+  bot[INSTALLED] = true
+  installEnchantFix(bot)
+  installWallEdgeFix(bot)
+  if (!['26.1', '26.1.2'].includes(bot.version)) return false
   const fields = minecraftData(bot.version).protocol.play.toServer.types.packet_entity_action[1]
   const mappings = fields.find((field) => field.name === 'actionId')?.type?.[1]?.mappings
   if (mappings?.[6] !== 'start_fall_flying' || mappings?.[1] !== 'start_sprinting' || mappings?.[2] !== 'stop_sprinting') throw new Error('26.1玩家动作协议与已验证映射不一致')
@@ -14,9 +19,6 @@ function installProtocolCompat(bot) {
     if (name === 'entity_action' && params?.actionId === 'start_elytra_flying') params = { ...params, actionId: 'start_fall_flying' }
     return originalWrite.call(this, name, params, ...rest)
   }
-  installEnchantFix(bot)
-  installWallEdgeFix(bot)
-  bot[INSTALLED] = true
   return true
 }
 // minecraft-data 26.1 把需要特定等级工具的方块（黑曜石、各种矿石…）的 material 写成了 incorrect_for_wooden_tool 这类标签，
@@ -74,7 +76,7 @@ function moveOffWallEdge(position) {
 }
 function installWallEdgeFix(bot) {
   const fix = () => { if (bot.entity?.position) moveOffWallEdge(bot.entity.position) }
-  bot._client.on('position', fix) // 排在 mineflayer 自己的处理之后
+  bot._client?.on('position', fix) // 排在 mineflayer 自己的处理之后
   bot.on('physicsTick', fix)
 }
 

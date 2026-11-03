@@ -1,0 +1,12 @@
+{
+  "$comment": "示例：木头不够就去砍，再做一个箱子。玩家 bot run wood，AI 也能调用",
+  "id": "wood",
+  "name": "补木头做箱子",
+  "description": "木头不够 16 个就去砍，再做一个箱子",
+  "ai": true,
+  "steps": [
+    { "if": { "has": "oak_log", "lt": 16 }, "do": "chop", "args": ["16"] },
+    { "do": "craft", "args": ["chest", "1"] },
+    { "say": "箱子做好了" }
+  ]
+}

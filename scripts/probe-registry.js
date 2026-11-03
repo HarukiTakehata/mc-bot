@@ -2,7 +2,7 @@
 const { createClient } = require('minecraft-protocol')
 const { parseRegistrySync } = require('../fabric')
 const fs = require('node:fs')
-const version = process.env.MC_VERSION || '26.1'
+const version = process.env.MC_VERSION || false // 不填就自动检测
 const client = createClient({ host: process.env.MC_HOST || '127.0.0.1', port: Number(process.env.MC_PORT || 25565),
   username: 'RegistryProbe', auth: 'offline', version })
 const channels = ['c:register', 'c:version', 'fabric:registry/sync/direct', 'fabric:registry/sync']

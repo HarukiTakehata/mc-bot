@@ -80,3 +80,11 @@ test('贴墙坐标往外让一点，物理库的碰撞才不会被浮点误差�
   moveOffWallEdge(away)
   assert.deepEqual(away, { x: 10.5, y: 64, z: -3.31 })
 })
+
+test('贴墙修正不挑版本：1.20.1 上贴墙站也会往外让一点（版本矩阵实测在 1.20.1 卡墙）', () => {
+  const { Vec3 } = require('vec3')
+  const bot = Object.assign(new EventEmitter(), { version: '1.20.1', supportFeature: () => false, _client: Object.assign(new EventEmitter(), { write() {} }), entity: { position: new Vec3(96.5, 134, -30.3) } })
+  assert.equal(installProtocolCompat(bot), false, '不装 26.1 动作映射')
+  bot.emit('physicsTick')
+  assert.ok(Math.abs(bot.entity.position.z + 30.3) > 5e-6 && Math.abs(bot.entity.position.z + 30.3) < 2e-5, String(bot.entity.position.z))
+})

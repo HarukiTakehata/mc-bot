@@ -1,0 +1,6 @@
+{
+  "id": "shogi",
+  "name": "Shogi",
+  "namespaces": ["shogi"],
+  "tips": [{ "keys": ["shogi", "将棋"], "text": "Shogi 模组：可以下将棋的方块" }]
+}

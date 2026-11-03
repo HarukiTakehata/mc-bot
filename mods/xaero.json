@@ -1,0 +1,8 @@
+{
+  "id": "xaero",
+  "name": "Xaero 小地图/世界地图",
+  "namespaces": ["xaerominimap", "xaeroworldmap"],
+  "tips": [
+    { "keys": ["地图", "xaero", "小地图", "路径点"], "text": "Xaero 小地图/世界地图：玩家可设路径点，告诉机器人坐标即可 bot goto" }
+  ]
+}
