@@ -5,12 +5,27 @@ class CancelledError extends Error {
   constructor(message = '任务已取消') { super(message); this.name = 'CancelledError' }
 }
 
+// 低优先级任务顶不掉高优先级：调用方拿到这个错误就知道是"忙"，不是"失败"
+class BusyError extends Error {
+  constructor(name, priority) {
+    super(`正在收尾或执行 ${name}，请稍等`)
+    this.name = 'BusyError'
+    this.code = 'BUSY'
+    this.priority = priority
+  }
+}
+
+// 数字越大越优先。日程 10 / 项目 20 / 自保 30 / 玩家 40
+const PRIORITIES = Object.freeze({ idle: 0, routine: 10, project: 20, survival: 30, player: 40 })
+
 function createRuntime({ timeoutMs = 180_000, onTimeout = () => {} } = {}) {
   const storage = new AsyncLocalStorage()
   let epoch = 0
   let controller = new AbortController()
   let pending = null
   let serial = 0
+  // 取消原因按代际记：调用方拿自己开始时的 epoch 来问，才知道是"被抢占"还是"被停止"
+  const cancelCodes = new Map()
   const isActive = () => {
     const s = storage.getStore()
     return !s || (s.epoch === epoch && !s.signal.aborted)
@@ -18,7 +33,9 @@ function createRuntime({ timeoutMs = 180_000, onTimeout = () => {} } = {}) {
   const assertActive = () => { if (!isActive()) throw new CancelledError() }
   const unscoped = (fn) => storage.run(undefined, fn)
   const scope = (fn) => storage.run(storage.getStore() || { epoch, signal: controller.signal }, fn)
-  const cancel = (reason = '任务已取消') => {
+  const cancel = (reason = '任务已取消', code = 'cancelled') => {
+    cancelCodes.set(epoch, code)
+    if (cancelCodes.size > 64) cancelCodes.delete(Math.min(...cancelCodes.keys()))
     controller.abort(new CancelledError(reason))
     epoch++
     controller = new AbortController()
@@ -34,14 +51,28 @@ function createRuntime({ timeoutMs = 180_000, onTimeout = () => {} } = {}) {
       if (signal?.aborted) abort()
     })
   }
-  async function runTask(name, fn, maxMs = timeoutMs) {
+  async function runTask(name, fn, options = {}) {
+    const { maxMs = timeoutMs, priority = PRIORITIES.routine } =
+      typeof options === 'number' ? { maxMs: options } : options
     assertActive()
-    if (pending) throw new Error(`正在收尾或执行 ${pending.name}，请稍等`)
-    const token = { id: ++serial, name, epoch, startedAt: Date.now() }
+    // 抢占：高优先级可以打断低优先级；被抢占的任务在 finally 里 settle，这里等它收尾
+    const waitEpoch = epoch
+    while (pending) {
+      if (priority <= pending.priority) throw new BusyError(pending.name, pending.priority)
+      const victim = pending
+      victim.preempted = true
+      cancel('被更高优先级任务抢占', 'preempted')
+      await victim.settled
+    }
+    // 等待期间可能来了 bot stop：这时不该再启动
+    const code = cancelCodes.get(waitEpoch)
+    if (code && code !== 'preempted') throw new CancelledError('任务已取消')
+    const token = { id: ++serial, name, priority, epoch, startedAt: Date.now(), preempted: false }
+    token.settled = new Promise((resolve) => { token.settle = resolve })
     pending = token
     const timer = setTimeout(() => unscoped(() => {
       if (pending !== token) return
-      cancel('任务超时')
+      cancel('任务超时', 'timeout')
       onTimeout(token)
     }), maxMs)
     try {
@@ -49,6 +80,7 @@ function createRuntime({ timeoutMs = 180_000, onTimeout = () => {} } = {}) {
     } finally {
       clearTimeout(timer)
       if (pending === token) pending = null
+      token.settle()
     }
   }
   function guard(target, names) {
@@ -93,8 +125,9 @@ function createRuntime({ timeoutMs = 180_000, onTimeout = () => {} } = {}) {
   }
   return { scope, unscoped, assertActive, isActive, cancel, delay, runTask, guardBot,
     busy: () => !!pending, generation: () => epoch,
+    cancelCode: (gen) => cancelCodes.get(gen),
     signal: () => storage.getStore()?.signal || controller.signal,
     status: () => pending ? { ...pending, cancelling: pending.epoch !== epoch } : null }
 }
 
-module.exports = { createRuntime, CancelledError }
+module.exports = { createRuntime, CancelledError, BusyError, PRIORITIES }

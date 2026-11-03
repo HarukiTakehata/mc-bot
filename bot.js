@@ -17,7 +17,7 @@ const { createExperience } = require('./experience')
 const { createContainers } = require('./containers')
 const { createCombat } = require('./combat')
 const hawkEye = require('minecrafthawkeye').default
-const { createRuntime, CancelledError } = require('./runtime')
+const { createRuntime, CancelledError, BusyError, PRIORITIES } = require('./runtime')
 const { createFlight } = require('./flight')
 const guidance = require('./flight-guidance')
 const { createCompanion } = require('./companion')
@@ -329,38 +329,47 @@ bot.on('physicsTick', () => {
 
 // ---- 任务管理：同一时间只做一件事，bot stop 可随时打断 ----
 let task = null
+let taskOrigin = 'player' // player / auto：halt 只取消自主发起的动作，不动玩家正在下的活
 async function runTask(name, fn, options = {}) {
   runtime.assertActive()
-  if (runtime.busy()) { say('上一个任务还在执行或收尾，请稍等'); return { ok: false, error: 'busy' } }
+  const priority = options.priority ?? PRIORITIES.player
   const generation = runtime.generation()
-  task = name
   const requester = currentRequester
   const startedAt = Date.now()
-  followTarget = null // 开始干别的就不再跟随/站岗
-  post = null
+  let preempted = false
   try {
     console.log(`[task] start ${name}`)
     agentEvents.push('task', { state: 'start', name })
     return await runtime.runTask(name, async () => {
+      task = name
+      taskOrigin = options.origin || 'player'
+      followTarget = null // 开始干别的就不再跟随/站岗
+      post = null
       bot.pathfinder.setGoal(null) // setMovements 本身不会移除旧的动态跟随目标。
       bot.pathfinder.setMovements(options.safe ? safeMoves : workMoves)
       const result = await fn()
       return result && typeof result.ok === 'boolean' ? result : { ok: true }
-    }, options.timeoutMs || (name.startsWith('烧') ? 12 * 60_000 : 180_000))
+    }, { maxMs: options.timeoutMs || (name.startsWith('烧') ? 12 * 60_000 : 180_000), priority })
   } catch (err) {
-    if (err instanceof CancelledError || generation !== runtime.generation()) return { ok: false, stopped: true }
+    // 低优先级顶不掉正在跑的任务：这是"忙"，不是失败
+    if (err instanceof BusyError) { say('上一个任务还在执行或收尾，请稍等'); return { ok: false, error: 'busy' } }
+    if (err instanceof CancelledError || generation !== runtime.generation()) {
+      preempted = runtime.cancelCode(generation) === 'preempted'
+      return preempted ? { ok: false, preempted: true } : { ok: false, stopped: true }
+    }
     say(`${name}失败: ${friendlyError(err)}`)
     console.log(`[task:${name}] ${err.name}: ${err.message}`)
     return { ok: false, error: err.message }
   } finally {
-    console.log(`[task] end ${name} cancelled=${generation !== runtime.generation()}`)
-    agentEvents.push('task', { state: 'end', name, cancelled: generation !== runtime.generation() })
-    // 超过 40 秒的活，做完点名告诉下指令的人（不然玩家不知道它忙完了）
-    if (generation === runtime.generation() && requester && Date.now() - startedAt > 40_000) {
+    const cancelled = preempted || generation !== runtime.generation()
+    console.log(`[task] end ${name} cancelled=${cancelled}${preempted ? ' preempted=true' : ''}`)
+    agentEvents.push('task', { state: 'end', name, cancelled, ...(preempted ? { preempted: true } : {}) })
+    // 超过 40 秒的活，做完点名告诉下指令的人（不然玩家不知道它忙完了）；被抢占的不算做完
+    if (!preempted && generation === runtime.generation() && requester && Date.now() - startedAt > 40_000) {
       runtime.unscoped(() => say(`${requester}，「${name}」这件事结束了（结果见上面），还有什么要我做的？`))
     }
-    if (generation === runtime.generation()) {
-      task = null
+    if (preempted || generation === runtime.generation()) {
+      if (task === name) { task = null; taskOrigin = 'player' }
       runtime.unscoped(() => bot.pathfinder.setMovements(safeMoves))
     }
   }
@@ -502,6 +511,20 @@ async function reach(goal, point, range = 2) {
 // 死亡、卡住、超时只打断当前这一步：长期目标保留，下一轮把状况告诉 AI 重新规划
 const GOAL_EVENTS = { death: '机器人刚死过一次，已在重生点复活', unstuck_limit: '连续卡住，脱困失败，上一个动作被取消', timeout: '上一个动作超时被取消' }
 function stopAll(reason = 'stop') {
+  // halt：只停自主，不碰玩家的目标和排队。玩家正在下的活继续做。
+  if (reason === 'halt') {
+    auto = false
+    if (taskOrigin === 'auto' && runtime.busy()) {
+      runtime.cancel('自主已停', 'halt')
+      runtime.unscoped(() => {
+        bot.pathfinder.setGoal(null)
+        bot.stopDigging()
+        bot.clearControlStates()
+        if (safeMoves) bot.pathfinder.setMovements(safeMoves)
+      })
+    }
+    return
+  }
   flight?.requestLand(reason)
   if (goal && GOAL_EVENTS[reason]) goalEvents.push(GOAL_EVENTS[reason])
   else goal = null
@@ -915,7 +938,7 @@ function resumeIdle() {
 // ---- 聊天指令 ----
 const TOO_FAR = '离太远看不到你（约 60 格外）。发 bot goto 你的坐标，或者走近点'
 const HELP = [
-  'bot come / follow / stay / stop / goto x y z / pos / hp / look',
+  'bot come / follow / stay / stop / halt / goto x y z / pos / hp / look',
   'bot mine <方块> [数量] (铁/煤/钻石/stone...) / chop [数量] / pickup',
   'bot inv / drop <物品> [数量] / craft <物品> [数量] / sleep / eat / guard on|off / auto on|off / say <内容>',
   '其他 "bot 随便说什么" 会交给 AI，比如: bot 帮我做一把石镐；bot workflows 看工作流',
@@ -971,6 +994,11 @@ const commands = {
       if (bot.entity) runtime.unscoped(() => say(`已提前落地 ${fmt(bot.entity.position)}`))
     }, 500)
     landed.unref?.()
+  },
+  halt: () => {
+    const wasAuto = auto
+    stopAll('halt')
+    runtime.unscoped(() => say(wasAuto ? '自主已停，目标和进度都保留；bot auto on 可以恢复' : '自主本来就是关的，没有要停的自主动作'))
   },
   pos: () => say(`我在 ${fmt(bot.entity.position)}`),
   hp: () => say(`血量 ${bot.health?.toFixed(0)} / 饱食 ${bot.food}`),
@@ -1947,7 +1975,7 @@ function handleChat(user, message, { whisper = false } = {}) {
     if (message.length > 1000) return say('指令太长了')
     const name = m[1].toLowerCase()
     const args = m[2] ? m[2].split(/\s+/) : []
-    const stopping = name === 'stop' || (name === 'goal' && args.length === 1 && args[0] === 'stop')
+    const stopping = name === 'stop' || name === 'halt' || (name === 'goal' && args.length === 1 && args[0] === 'stop')
     if (!stopping && (!inputLimit.take(user) || !globalInputLimit.take())) {
       // 限流时别一声不吭（实测：玩家会以为机器人死机了）；提示本身也限频
       if (limitNotice.take(user)) say(`${user}，指令发太快了，等几秒再发`)
