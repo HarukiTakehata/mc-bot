@@ -485,9 +485,32 @@ function createAbilities(bot, ctx) {
 
   const n = (v, d) => Number(v) || d
   const long = { timeoutMs: 10 * 60_000 }
+  // 粗粒度续做：同一物品+数量在 15 分钟内被重新下指令时，按背包增量跳过已经拿到的部分。
+  // 只存内存，进程重启即失效（P0 的范围，进度不落盘）。
+  const getProgress = new Map()
+  function getWithResume(name, want) {
+    const key = `${name}|${want}`
+    const now = Date.now()
+    let rec = getProgress.get(key)
+    if (rec && now - rec.at > 15 * 60_000) rec = null
+    if (!rec) { rec = { baseline: itemCount(name), at: now }; getProgress.set(key, rec) }
+    const already = Math.max(0, itemCount(name) - rec.baseline)
+    const left = Math.max(0, want - already)
+    if (!left) {
+      getProgress.delete(key)
+      say(`${name} 已经够了（${already}/${want}），不重复拿`)
+      return { ok: true }
+    }
+    if (already) say(`已经拿到 ${already}/${want} 个 ${name}，还差 ${left}`)
+    return runTask(`拿${name}`, async () => {
+      const result = await get(name, left)
+      if (result?.ok !== false) getProgress.delete(key)
+      return result
+    }, long)
+  }
   return {
     commands: {
-      get: (_u, [name, c]) => name ? runTask(`拿${name}`, () => get(name, n(c, 1)), long) : say('用法: bot get <物品> [数量]'),
+      get: (_u, [name, c]) => name ? getWithResume(name, n(c, 1)) : say('用法: bot get <物品> [数量]'),
       plan: (_u, [name, c]) => name ? plan(name, n(c, 1)) : say('用法: bot plan <物品> [数量]'),
       farm: (_u, [r]) => runTask('种田', () => farm(n(r, 16)), long),
       breed: (_u, [animal]) => runTask(`喂${animal}`, () => breed(animal)),

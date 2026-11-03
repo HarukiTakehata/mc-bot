@@ -21,6 +21,7 @@ const { createRuntime, CancelledError, BusyError, PRIORITIES } = require('./runt
 const { createFlight } = require('./flight')
 const guidance = require('./flight-guidance')
 const { createCompanion } = require('./companion')
+const { createDirector } = require('./autonomy')
 const { installProtocolCompat, fixToolMaterials } = require('./protocol-compat')
 const { finishFlightRoute } = require('./flight-route')
 const { createAutoTravel } = require('./auto-travel')
@@ -329,11 +330,14 @@ bot.on('physicsTick', () => {
 
 // ---- 任务管理：同一时间只做一件事，bot stop 可随时打断 ----
 let task = null
-let taskOrigin = 'player' // player / auto：halt 只取消自主发起的动作，不动玩家正在下的活
+let defaultPriority = null // 日程调用指令时临时设置，让指令内部的 runTask 继承 routine 优先级
+let defaultOrigin = null
 async function runTask(name, fn, options = {}) {
   runtime.assertActive()
-  const priority = options.priority ?? PRIORITIES.player
-  const generation = runtime.generation()
+  const priority = options.priority ?? defaultPriority ?? PRIORITIES.player
+  const origin = options.origin ?? defaultOrigin ?? 'player'
+  // 任务真正开始的那一代才算自己的：等待抢占期间 epoch 会变
+  let generation = runtime.generation()
   const requester = currentRequester
   const startedAt = Date.now()
   let preempted = false
@@ -341,15 +345,15 @@ async function runTask(name, fn, options = {}) {
     console.log(`[task] start ${name}`)
     agentEvents.push('task', { state: 'start', name })
     return await runtime.runTask(name, async () => {
+      generation = runtime.generation()
       task = name
-      taskOrigin = options.origin || 'player'
       followTarget = null // 开始干别的就不再跟随/站岗
       post = null
       bot.pathfinder.setGoal(null) // setMovements 本身不会移除旧的动态跟随目标。
       bot.pathfinder.setMovements(options.safe ? safeMoves : workMoves)
       const result = await fn()
       return result && typeof result.ok === 'boolean' ? result : { ok: true }
-    }, { maxMs: options.timeoutMs || (name.startsWith('烧') ? 12 * 60_000 : 180_000), priority })
+    }, { maxMs: options.timeoutMs || (name.startsWith('烧') ? 12 * 60_000 : 180_000), priority, origin })
   } catch (err) {
     // 低优先级顶不掉正在跑的任务：这是"忙"，不是失败
     if (err instanceof BusyError) { say('上一个任务还在执行或收尾，请稍等'); return { ok: false, error: 'busy' } }
@@ -369,7 +373,7 @@ async function runTask(name, fn, options = {}) {
       runtime.unscoped(() => say(`${requester}，「${name}」这件事结束了（结果见上面），还有什么要我做的？`))
     }
     if (preempted || generation === runtime.generation()) {
-      if (task === name) { task = null; taskOrigin = 'player' }
+      if (task === name) task = null
       runtime.unscoped(() => bot.pathfinder.setMovements(safeMoves))
     }
   }
@@ -514,7 +518,8 @@ function stopAll(reason = 'stop') {
   // halt：只停自主，不碰玩家的目标和排队。玩家正在下的活继续做。
   if (reason === 'halt') {
     auto = false
-    if (taskOrigin === 'auto' && runtime.busy()) {
+    director?.stop()
+    if (runtime.status()?.origin === 'auto') {
       runtime.cancel('自主已停', 'halt')
       runtime.unscoped(() => {
         bot.pathfinder.setGoal(null)
@@ -996,9 +1001,9 @@ const commands = {
     landed.unref?.()
   },
   halt: () => {
-    const wasAuto = auto
+    const wasAuto = director.enabled()
     stopAll('halt')
-    runtime.unscoped(() => say(wasAuto ? '自主已停，目标和进度都保留；bot auto on 可以恢复' : '自主本来就是关的，没有要停的自主动作'))
+    runtime.unscoped(() => say(wasAuto ? '自主已停，目标和进度都保留' : '自主本来就是关的，没有要停的自主动作'))
   },
   pos: () => say(`我在 ${fmt(bot.entity.position)}`),
   hp: () => say(`血量 ${bot.health?.toFixed(0)} / 饱食 ${bot.food}`),
@@ -1437,7 +1442,7 @@ commands.status = () => {
   const traffic = autoTravel.status()
   const transport = traffic.active ? ({ SELECTING: '评估路线', WALKING: '步行', FLIGHT_REQUESTED: '鞘翅准备/飞行' }[traffic.phase] || '赶路中')
     : ({ walk: '步行', fly: '鞘翅', hybrid: '鞘翅和步行' }[traffic.last?.transport] || '无')
-  say(`任务: ${current ? `${current.name}${current.cancelling ? '（收尾中）' : ''}` : '空闲'}；交通:${transport}；飞行:${flight?.status()?.phase || 'IDLE'}；AI额度: ${ai ? `本分钟剩${stats.minute.remaining}/${stats.minute.limit}，本小时剩${stats.hour.remaining}/${stats.hour.limit}` : '未配置'}；目标: ${goal?.label || goal?.text || '无'}`)
+  say(`任务: ${current ? `${current.name}${current.cancelling ? '（收尾中）' : ''}` : '空闲'}；交通:${transport}；飞行:${flight?.status()?.phase || 'IDLE'}；自主:${director.enabled() ? `开(本小时剩${director.budget().left}/${director.budget().max})` : '关'}；AI额度: ${ai ? `本分钟剩${stats.minute.remaining}/${stats.minute.limit}，本小时剩${stats.hour.remaining}/${stats.hour.limit}` : '未配置'}；目标: ${goal?.label || goal?.text || '无'}`)
 }
 
 // 玩家的“这里”“这个”：给 AI 说话人的坐标和他正看着的方块
@@ -1984,7 +1989,9 @@ function handleChat(user, message, { whisper = false } = {}) {
     if (!safeMoves || !bot.entity) return say('还没准备好，请等进服后再试')
     console.log(`[command] user=${String(user).slice(0, 32)} cmd=${name.slice(0, 32)}`)
     const reading = readCommands.has(name) || !!extensionCommands.get(name)?.read || (['mode', 'note', 'goal'].includes(name) && !args.length)
-    if (!stopping && !reading && (runtime.busy() || aiWork || goal || flight?.active() || workflowActive)) {
+    // 当前在跑自主动作时，玩家指令直接抢占，不进队列（抢占在动作边界生效）
+    const preemptable = runtime.status()?.origin === 'auto' && !goal && !aiWork && !flight?.active() && !workflowActive
+    if (!stopping && !reading && !preemptable && (runtime.busy() || aiWork || goal || flight?.active() || workflowActive)) {
       // 不是固定指令的自然语言才走这里：固定指令照旧排队
       if (!getCommand(commands, name) && whileBusy(user, body)) return
       // 忙的时候不拒绝，排队（最多 3 条），手上的做完就接着做
@@ -2104,6 +2111,76 @@ function inventoryCount(name) {
   return bot.inventory.items().filter((i) => i.name === name).reduce((n, i) => n + i.count, 0)
 }
 const isNight = () => { const t = bot.time?.timeOfDay ?? 0; return t >= 13000 && t < 23000 }
+// ---- 本地日程：不调用模型的自主（MC_AUTONOMY=on 才启用），bot halt 可以停 ----
+const AUTONOMY = /^(1|on|true|yes)$/i.test(String(process.env.MC_AUTONOMY || ''))
+const AUTONOMY_TICK = Math.min(60_000, Math.max(1000, Number(process.env.MC_AUTONOMY_TICK) || 5000))
+const AUTONOMY_MAX = Math.min(240, Math.max(1, Number(process.env.MC_AUTONOMY_MAX) || 60))
+const hostileNear = (radius = 12) => {
+  if (!bot.entity) return 0
+  return Object.values(bot.entities).filter((e) => e !== bot.entity && e.kind === 'Hostile mobs' &&
+    e.position.distanceTo(bot.entity.position) < radius).length
+}
+function autonomyState() {
+  if (!bot.entity) return { busy: true }
+  const inventory = {}
+  for (const item of bot.inventory.items()) inventory[item.name] = (inventory[item.name] || 0) + item.count
+  const home = skills.places && Object.hasOwn(skills.places, '家') ? skills.places['家'] : null
+  const p = bot.entity.position
+  return {
+    hp: bot.health ?? 20,
+    food: bot.food ?? 20,
+    night: isNight(),
+    distanceToHome: home ? Math.hypot(home.x - p.x, home.z - p.z) : Infinity,
+    homeName: '家',
+    inventory,
+    nearHostiles: hostileNear(),
+    busy: runtime.busy() || !!aiWork || !!goal || flight?.active() || !!workflowActive || queue.length > 0 || combat.active(),
+  }
+}
+// 日程只调已有指令；优先级/来源放在模块级临时值上，让指令内部的 runTask 继承。
+// 指令失败往往只是 say("...需要更好的镐")，所以按 handleChat 同一套 FAILURE 规则判成 fail。
+async function runAutonomyStep(next) {
+  const fn = getCommand(commands, next.cmd)
+  if (!fn) return { ok: false, error: `没有指令 ${next.cmd}` }
+  const prevPriority = defaultPriority
+  const prevOrigin = defaultOrigin
+  const outer = sayLog
+  const said = []
+  defaultPriority = PRIORITIES.routine
+  defaultOrigin = 'auto'
+  sayLog = said
+  let outcome
+  let promise
+  try {
+    // 指令通常同步进入 runTask，靠这一瞬间的默认值继承 routine/auto；
+    // 取到 promise 就恢复，否则玩家指令在自主任务运行期间也会被当成 routine。
+    promise = fn(null, next.args)
+  } finally {
+    defaultPriority = prevPriority
+    defaultOrigin = prevOrigin
+  }
+  try {
+    outcome = await promise
+  } finally {
+    if (sayLog === said) sayLog = outer
+    outer?.push(...said)
+  }
+  // 被玩家抢占不是失败：不记账、不退避
+  if (outcome?.preempted || outcome?.stopped) return { ok: true, preempted: !!outcome.preempted }
+  const bad = outcome?.ok === false || said.some((l) => FAILURE.test(l))
+  const why = said.find((l) => FAILURE.test(l)) || outcome?.error || '动作没有完成'
+  return bad ? { ok: false, error: String(why).slice(0, 160) } : { ok: true }
+}
+const director = createDirector({
+  getState: autonomyState,
+  run: runAutonomyStep,
+  tickMs: AUTONOMY_TICK,
+  maxPerHour: AUTONOMY_MAX,
+})
+if (AUTONOMY) {
+  console.log(`[auto] 本地日程启用：每 ${AUTONOMY_TICK / 1000} 秒检查一次，每小时最多 ${AUTONOMY_MAX} 个动作`)
+  setTimeout(() => director.start(), 5000).unref?.()
+}
 // 执行一条指令并判断成败（和 AI 动作同一套判断）
 async function execStep(user, cmd, args) {
   if (task) await waitIdle()

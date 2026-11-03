@@ -52,9 +52,12 @@ function createRuntime({ timeoutMs = 180_000, onTimeout = () => {} } = {}) {
     })
   }
   async function runTask(name, fn, options = {}) {
-    const { maxMs = timeoutMs, priority = PRIORITIES.routine } =
+    const { maxMs = timeoutMs, priority = PRIORITIES.routine, origin = null } =
       typeof options === 'number' ? { maxMs: options } : options
     assertActive()
+    // 同一任务内部再调 runTask（指令互相复用）不该当成新任务抢自己
+    const store = storage.getStore()
+    if (pending && store?.owner === pending) return await fn()
     // 抢占：高优先级可以打断低优先级；被抢占的任务在 finally 里 settle，这里等它收尾
     const waitEpoch = epoch
     while (pending) {
@@ -67,7 +70,7 @@ function createRuntime({ timeoutMs = 180_000, onTimeout = () => {} } = {}) {
     // 等待期间可能来了 bot stop：这时不该再启动
     const code = cancelCodes.get(waitEpoch)
     if (code && code !== 'preempted') throw new CancelledError('任务已取消')
-    const token = { id: ++serial, name, priority, epoch, startedAt: Date.now(), preempted: false }
+    const token = { id: ++serial, name, priority, origin, epoch, startedAt: Date.now(), preempted: false }
     token.settled = new Promise((resolve) => { token.settle = resolve })
     pending = token
     const timer = setTimeout(() => unscoped(() => {
@@ -76,7 +79,8 @@ function createRuntime({ timeoutMs = 180_000, onTimeout = () => {} } = {}) {
       onTimeout(token)
     }), maxMs)
     try {
-      return await scope(async () => { const result = await fn(); assertActive(); return result })
+      const signal = controller.signal
+      return await storage.run({ epoch: token.epoch, signal, owner: token }, async () => { const result = await fn(); assertActive(); return result })
     } finally {
       clearTimeout(timer)
       if (pending === token) pending = null

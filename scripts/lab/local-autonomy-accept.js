@@ -1,0 +1,22 @@
+// 实机验收：给物资 → 观察自主挖矿 → 玩家抢占 → halt
+const mineflayer = require('mineflayer')
+const t0 = Date.now()
+const log = (...a) => console.log(((Date.now() - t0) / 1000).toFixed(1) + 's', ...a)
+const bot = mineflayer.createBot({ host: '127.0.0.1', port: 25565, username: 'Tester', version: '26.1.2', auth: 'offline' })
+bot.on('messagestr', (m) => log('[chat]', m))
+bot.on('error', (e) => log('[error]', e.message))
+bot.once('spawn', async () => {
+  log('tester spawned')
+  const say = async (ms, msg) => { await new Promise((r) => setTimeout(r, ms)); if (msg) { log('>> ' + msg); bot.chat(msg) } }
+  await say(2000, '/give LabBot minecraft:wooden_pickaxe 1')
+  await say(600, '/give LabBot minecraft:oak_log 16')
+  await say(600, '/give LabBot minecraft:bread 8')
+  await say(3000, 'bot status')
+  await say(20000, 'bot status')
+  await say(3000, 'bot come')
+  await say(12000, 'bot halt')
+  await say(2500, 'bot status')
+  await say(3000, null)
+  bot.quit()
+})
+setTimeout(() => { log('hard timeout'); process.exit(0) }, 90_000)
