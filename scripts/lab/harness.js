@@ -1,5 +1,6 @@
-// 实机测试基座：只连本机隔离实验服（固定容器名和端口），绝不访问生产服。
+// 实机测试基座：通过显式 LAB_CONTAINER 和本机端口连接可丢弃的隔离测试服。
 // 判定尽量走服务器侧真相（RCON 读坐标、背包、方块），不信机器人自己说的话。
+const config = require('./config').loadLabConfig()
 const mineflayer = require('mineflayer')
 const { spawn, spawnSync } = require('node:child_process')
 const fs = require('node:fs')
@@ -7,19 +8,19 @@ const path = require('node:path')
 const { setupFabric } = require('../../fabric')
 const { createMods } = require('../../mods')
 
-const LAB = process.env.LAB_CONTAINER || 'luomo-mcbot-cap-lab-20261030'
-const PORT = 25577
+const LAB = config.container
+const PORT = config.port
 const NAME = 'LabBot'
 const TESTER = 'Tester'
-const ROOT = path.resolve(__dirname, '../..')
-const EVIDENCE = process.env.LAB_EVIDENCE || path.resolve(ROOT, '../private/evidence')
+const ROOT = config.root
+const EVIDENCE = config.outputDir
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function rcon(command) {
-  const r = spawnSync('docker', ['exec', LAB, 'rcon-cli', command], { encoding: 'utf8', timeout: 30_000 })
+  const r = spawnSync('docker', config.rconArgs(command), { encoding: 'utf8', timeout: 30_000 })
   if (r.status !== 0) throw new Error(`RCON 失败: ${command}: ${r.stderr || r.stdout}`)
   const out = r.stdout.replace(/\x1b\[[0-9;]*m/g, '').trim()
-  // rcon-cli 对命令错误也返回 0：语法错必须抛出来，否则基座静默失效（踩过：gamerule 改名后满世界刷怪）
+  // rcon-cli 对命令错误也可能返回 0，必须另外检查语法错误。
   if (/Incorrect argument|Unknown or incomplete command|Expected .*<--\[HERE\]/.test(out)) throw new Error(`RCON 命令错误: ${command}: ${out}`)
   return out
 }
@@ -32,7 +33,7 @@ function createLab({ ai = false, fakeAI = false, viewDistance = 'short' } = {}) 
   fs.mkdirSync(EVIDENCE, { recursive: true, mode: 0o700 })
 
   lab.startBot = async () => {
-    const env = { ...process.env, MC_HOST: '127.0.0.1', MC_PORT: String(PORT), MC_NAME: NAME, MC_VERSION: '26.1', MC_VIEW: viewDistance }
+    const env = { ...process.env, MC_HOST: config.host, MC_PORT: String(PORT), MC_NAME: NAME, MC_VERSION: config.version, MC_VIEW: viewDistance }
     if (!ai) env.DEEPSEEK_API_KEY = fakeAI ? 'lab-placeholder-not-a-real-key' : ''
     const mark = lab.log.length
     lab.child = spawn(process.execPath, ['--max-old-space-size=256', ...(fakeAI ? ['--require', path.join(__dirname, 'fake-deepseek.js')] : []), 'bot.js'], { cwd: ROOT, env, stdio: ['ignore', 'pipe', 'pipe'] })
@@ -50,9 +51,9 @@ function createLab({ ai = false, fakeAI = false, viewDistance = 'short' } = {}) 
   }
 
   lab.startTester = async () => {
-    const t = mineflayer.createBot({ host: '127.0.0.1', port: PORT, username: TESTER, auth: 'offline', version: '26.1', viewDistance: 'short' })
+    const t = mineflayer.createBot({ host: config.host, port: PORT, username: TESTER, auth: 'offline', version: config.version, viewDistance: 'short' })
     const testerMods = createMods({ log: () => {} })
-    setupFabric(t, { version: '26.1', onRegistries: (ns) => { testerMods.activate(ns); return testerMods.componentCodecs() } })
+    setupFabric(t, { version: config.version, onRegistries: (ns) => { testerMods.activate(ns); return testerMods.componentCodecs() } })
     t.on('error', (err) => { lab.log += `[tester] ${err.message}\n` })
     t.on('chat', (u, text) => { if (u === NAME) lab.chat.push({ at: Date.now(), text }) })
     t.on('whisper', (u, text) => { if (u === NAME) lab.chat.push({ at: Date.now(), text }) })
@@ -113,8 +114,7 @@ function createLab({ ai = false, fakeAI = false, viewDistance = 'short' } = {}) 
       await sleep(600)
     }
   }
-  // 连跑几小时后饿度归零，每 4 秒掉 1 血，共享血量把机器人一起拖下去（实测：水下场景因此误判）。
-  // saturation 效果在这个服上加不了饿度，只能真吃
+  // 共享血量模组会把测试员的饥饿伤害同步给机器人；必要时让测试员进食。
   lab.feed = async () => {
     const t = lab.tester
     if (!t || t.food >= 14) return

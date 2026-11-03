@@ -57,7 +57,7 @@ function createExplorer(bot, ctx) {
   })
 
   async function tryItem(name) {
-    if (!name.includes(':')) return say(`${name} 是原版物品，用法直接问我（bot ${name}怎么用），不用拿共享物品试`)
+    if (!name.includes(':')) return say(`${name} 是原版物品，用法直接问我（bot ${name}怎么用），不用消耗物品试用`)
     const item = findItem(name)
     if (!item) return say(`背包里没有 ${name}，没法试`)
     const before = {}

@@ -1,15 +1,16 @@
 // 独立空世界中的两个测试客户端验证真实聊天→指令→行为，不读取.env。
+const config = require('./lab/config').loadLabConfig()
 const mineflayer = require('mineflayer')
 const { spawn, spawnSync } = require('node:child_process')
 const fs = require('node:fs')
 const path = require('node:path')
-const LAB = 'luomo-mcbot-elytra-lab-20261030', NAME = 'CompanionLabBot', OWNER = 'FollowLabOwner'
+const NAME = 'CompanionLabBot', OWNER = 'FollowLabOwner'
 const report = { startedAt: new Date().toISOString(), checks: [], messages: [], commands: [], botLog: '' }
-const out = process.env.FLIGHT_TEST_OUTPUT || '/tmp/mcbot-flight-evidence'
+const out = process.env.FLIGHT_TEST_OUTPUT || path.join(config.outputDir, 'companion-live')
 fs.mkdirSync(out, { recursive: true, mode: 0o700 })
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 function rcon(command) {
-  const r = spawnSync('docker', ['exec', LAB, 'rcon-cli', '--config', '/data/.rcon-cli.yaml', command], { encoding: 'utf8', timeout: 15_000 })
+  const r = spawnSync('docker', config.rconArgs(command), { encoding: 'utf8', timeout: 15_000 })
   if (r.status !== 0) throw new Error('Lab RCON failed')
   report.commands.push({ command, output: r.stdout.trim() })
   return r.stdout.trim()
@@ -26,7 +27,7 @@ async function until(fn, ms = 12_000) {
 }
 let child, owner
 async function connectOwner() {
-  const b = mineflayer.createBot({ host: '127.0.0.1', port: 25576, username: OWNER, auth: 'offline', version: '26.1' })
+  const b = mineflayer.createBot({ host: config.host, port: config.port, username: OWNER, auth: 'offline', version: config.version })
   b.on('chat', (u, text) => { if (u === NAME) report.messages.push(text) })
   b.on('error', (err) => { report.ownerError = err.message })
   let timer
@@ -37,7 +38,7 @@ async function connectOwner() {
 async function run() {
   if (!/0 of a max/.test(rcon('list'))) throw new Error('Isolated lab is occupied; refusing test')
   child = spawn(process.execPath, ['--max-old-space-size=256', path.resolve(__dirname, '../bot.js')], {
-    cwd: path.resolve(__dirname, '..'), env: { ...process.env, MC_HOST: '127.0.0.1', MC_PORT: '25576', MC_NAME: NAME, MC_VERSION: '26.1', DEEPSEEK_API_KEY: '' }, stdio: ['ignore', 'pipe', 'pipe'],
+    cwd: config.root, env: { ...process.env, MC_HOST: config.host, MC_PORT: String(config.port), MC_NAME: NAME, MC_VERSION: config.version, DEEPSEEK_API_KEY: '' }, stdio: ['ignore', 'pipe', 'pipe'],
   })
   child.stdout.on('data', (s) => { report.botLog += String(s) })
   child.stderr.on('data', (s) => { report.botLog += String(s) })

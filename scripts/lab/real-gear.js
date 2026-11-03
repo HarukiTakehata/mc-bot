@@ -1,4 +1,4 @@
-// 真实玩家的状态：带附魔工具、戴头盔；自然地形上走长路。实验服全新世界，判定走服务器侧。
+// 装备兼容性与长距离步行场景：使用隔离测试世界，判定走服务器侧。
 const { createLab, rcon, assert, sleep, NAME, TESTER } = require('./harness')
 const hyp = (a, b) => Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z)
 
@@ -27,7 +27,11 @@ async function gear(lab) {
 
 const scenarios = {
   async '附魔斧加头盔_砍树'(lab) {
-    await surface(NAME, -40, -30); await gear(lab)
+    const a = await lab.arena(29900, 0)
+    // 自行搭建测试树，避免依赖固定世界种子在某个坐标生成树木。
+    rcon(`fill ${a.cx + 2} 103 ${a.cz - 2} ${a.cx + 6} 105 ${a.cz + 2} minecraft:oak_leaves[persistent=true]`)
+    rcon(`fill ${a.cx + 4} 100 ${a.cz} ${a.cx + 4} 104 ${a.cz} minecraft:oak_log`)
+    await gear(lab)
     const item = lab.tester.inventory.items().find((i) => i.name === 'iron_axe')
     const shape = item && JSON.stringify({ enchants: item.enchants }).slice(0, 200)
     const r = await lab.cmd('bot chop 4', /砍树.*(完成|结束)|挖到|已挖|收集|砍了|共|找不到/, /失败|TypeError/, 120_000)

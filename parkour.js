@@ -1,6 +1,6 @@
 // 跑酷：自带 A* 路线（走、上台阶、下落、跳 1~3 格沟、跳上/跳下、爬梯子）。
 // 思路参考 Azalea 的 parkour move 表和 Baritone MovementParkour；"起跳前先物理模拟" 参考 mineflayer-pathfinder 的 physics.js。
-// 共享血量：摔一下全队掉血。默认只走摔不死的路线（沟下 3 格内有地或有水），岩浆/虚空上方一律不跳；
+// 默认只走摔不死的路线（沟下 3 格内有地或有水），岩浆/虚空上方一律不跳；
 // 每一跳都用 prismarine-physics 模拟，模拟落不到目标就不跳，换路线。
 const { PlayerState } = require('prismarine-physics')
 const { Vec3 } = require('vec3')
@@ -375,7 +375,7 @@ function createParkour(bot, ctx) {
   }
 
   async function run(goal, risk) {
-    if (bot.health <= MIN_HP) return { ok: false, error: `血量 ${bot.health.toFixed(0)}，共享血量不够摔，先回血再跳` }
+    if (bot.health <= MIN_HP) return { ok: false, error: `血量 ${bot.health.toFixed(0)}，先回血再跳` }
     let plan = route(goal, risk)
     if (!plan.ok) return { ok: false, error: plan.exhausted ? '路线太复杂，搜索放弃了' : `没有安全的跑酷路线（最近能到 ${plan.closest.x} ${plan.closest.y} ${plan.closest.z}）` }
     say(`路线 ${describeRoute(plan.moves)}，出发`)

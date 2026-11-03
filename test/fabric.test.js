@@ -14,7 +14,7 @@ test('合法Fabric同步保持顺序并使用无原型映射', () => {
   assert.deepEqual(result.item, ['minecraft:stone', 'minecraft:dirt'])
   assert.equal(Object.getPrototypeOf(result), null)
 })
-test('实际26.1模组服注册表样本的哈希、完整解析和数量均匹配', () => {
+test('合成26.1注册表样本的哈希、完整解析和数量均匹配', () => {
   const buf = fs.readFileSync(path.join(__dirname, 'fixtures/fabric-26.1.bin'))
   const meta = require('./fixtures/fabric-26.1.json')
   assert.equal(createHash('sha256').update(buf).digest('hex'), meta.sha256)
@@ -24,6 +24,7 @@ test('实际26.1模组服注册表样本的哈希、完整解析和数量均匹�
   assert.equal(result.item.length, meta.item_count)
   assert.equal(result.block.length, meta.block_count)
   assert.equal(result.data_component_type.length, meta.component_count)
+  assert.deepEqual(result.item.slice(-2), ['waystones:waystone', 'refinedstorage:controller'])
 })
 test('截断、超长VarInt、非法UTF8、尾随数据和声明放大快速拒绝', () => {
   for (let n = 0; n < valid.length; n++) assert.throws(() => parseRegistrySync(valid.subarray(0, n)))
@@ -43,7 +44,7 @@ test('畸形同步不发送成功确认并关闭配置连接', () => {
   assert.equal(ends.length, 1)
 })
 
-test('真实注册表：内置扩展按命名空间启用，并只登记它们声明的组件编码', () => {
+test('合成注册表：内置扩展按命名空间启用，并只登记它们声明的组件编码', () => {
   const { createMods } = require('../mods')
   const { namespacesOf, patchComponents } = require('../fabric')
   const types = require('minecraft-data')('26.1').protocol.types
@@ -57,7 +58,7 @@ test('真实注册表：内置扩展按命名空间启用，并只登记它们�
   const log = console.log
   console.log = (...a) => logs.push(a.join(' '))
   try { patchComponents('26.1', parsed.data_component_type, mods.componentCodecs()) } finally { console.log = log }
-  assert.ok(logs.some((l) => /认识 15 个，不认识 9 个/.test(l)), logs.join('\n'))
+  assert.ok(logs.some((l) => /认识 3 个，不认识 1 个/.test(l)), logs.join('\n'))
   assert.equal(types.SlotComponent[1][1].type[1].fields['waystones:waystone'], 'anonymousNbt')
   assert.equal(types.SlotComponent[1][1].type[1].fields['refinedstorage:pattern_state'], undefined)
 })

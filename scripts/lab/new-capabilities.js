@@ -53,7 +53,7 @@ function circuitCase(name, x, facing, extra = (async () => ({}))) {
     return { said: r.text, ...more }
   }
 }
-// 整个场地宽度的护城河：跳不过就掉水，绝没有绕路走过去的可能（踩过：窄沟被走路绕过，假通过）
+// 护城河覆盖整个场地宽度，避免绕路走过而造成跳跃测试误判。
 function moat(x1, x2, a, r = 40) {
   rcon(`fill ${x1} 90 ${a.cz - r} ${x2} 99 ${a.cz + r} minecraft:air`)
   rcon(`fill ${x1} 90 ${a.cz - r} ${x2} 96 ${a.cz + r} minecraft:water`)

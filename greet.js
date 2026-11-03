@@ -1,9 +1,7 @@
 // 有人上线时私聊打招呼。带颜色、渐变、标题、音效、粒子的特效需要 /tellraw 等管理员指令，
-// 机器人本身不是 OP，所以以服务器控制台身份发送，只发给上线的那个人。两种控制台任选：
+// 无需给机器人 OP：通过服务器标准 RCON 接口发送，只发给上线的那个人。
 //   MC_RCON_PASSWORD（+ MC_RCON_HOST、MC_RCON_PORT）：直接走 RCON
-//   MC_CTL：本机的控制台脚本，按 python3 <MC_CTL> --world <MC_WORLD> console <指令> 调用
-// 都没配或不可用时退回普通 /msg 私聊。
-const { execFile } = require('child_process')
+// 未配置或不可用时退回普通 /msg 私聊。
 const { rconRun } = require('./rcon')
 
 const USERNAME = /^[A-Za-z0-9_]{1,16}$/
@@ -77,14 +75,6 @@ function consoleFrom(env) {
     const options = { host: env.MC_RCON_HOST || env.MC_HOST || '127.0.0.1', port, password: env.MC_RCON_PASSWORD }
     return (commands) => rconRun(options, commands)
   }
-  if (env.MC_CTL) {
-    const world = env.MC_WORLD || 'production'
-    const one = (command) => new Promise((resolve, reject) => {
-      execFile('/usr/bin/python3', [env.MC_CTL, '--world', world, 'console', command], { timeout: 10_000 },
-        (err) => (err ? reject(err) : resolve()))
-    })
-    return async (commands) => { for (const c of commands) await one(c) }
-  }
   return null
 }
 
@@ -99,7 +89,7 @@ function createGreeter(bot, ctx, env = process.env) {
   async function greet(name) {
     const online = Object.keys(bot.players).filter((n) => n !== bot.username).length
     try {
-      if (!run) throw new Error('没配置 MC_RCON_PASSWORD 或 MC_CTL')
+      if (!run) throw new Error('没配置 MC_RCON_PASSWORD')
       await run(greetingCommands(name, bot.username, { online, serverName }))
       ctx.log(`[greet] ${name}（特效）`)
     } catch (err) {

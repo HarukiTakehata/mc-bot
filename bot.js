@@ -1,5 +1,5 @@
 // 轻量 Minecraft 机器人：无画面，只走网络协议。
-// 用法：MC_HOST=127.0.0.1 MC_PORT=25565 MC_NAME=Claude_Bot node bot.js（MC_VERSION 不填就自动检测服务器版本）
+// 用法：MC_HOST=127.0.0.1 MC_PORT=25565 MC_NAME=MinecraftBot node bot.js（MC_VERSION 不填就自动检测服务器版本）
 // 原版、Paper/Spigot、Fabric 服都能进；模组支持见 mods/ 和 extensions/（README 的“模组扩展”一节）
 const mineflayer = require('mineflayer')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
@@ -59,7 +59,7 @@ const agentEvents = createEventLog() // 给 Agent API / MCP 的事件流
 const bot = mineflayer.createBot({
   host: process.env.MC_HOST || '127.0.0.1',
   port: Number(process.env.MC_PORT || 25565),
-  username: process.env.MC_NAME || 'Claude_Bot',
+  username: process.env.MC_NAME || 'MinecraftBot',
   auth: 'offline',
   version: VERSION,
   // 服务器只同步视距内的玩家位置：tiny(2 区块)只能看到 ~30 格，short(4) 约 60 格，内存多占几十 MB
@@ -118,7 +118,7 @@ function sendChat(chunk) {
   if (chatBacklog.length > CHAT_BACKLOG) console.log(`[chat] 说得太快，丢弃: ${chatBacklog.shift().slice(0, 40)}`)
   if (!chatTimer) { chatTimer = setTimeout(drainChat, CHAT_REFILL_MS); chatTimer.unref?.() }
 }
-// 私聊来的查询（背包、坐标、状态）私聊回：以前回在公屏，全服可见，还被 QQ 互通转发进群（正式服实测）
+// 私聊来的查询（背包、坐标、状态）私聊回，避免在公屏广播玩家信息。
 const replyStore = new (require('node:async_hooks').AsyncLocalStorage)()
 const say = (msg) => {
   if (!runtime.isActive()) return
@@ -202,7 +202,7 @@ bot.on('physicsTick', () => {
 // 干活用的寻路配置（能挖能搭）
 function createWorkMoves() {
   const moves = new Movements(bot)
-  // 默认允许从任意高度往水里跳；没跳准就摔死（实测：从 30 多格高的平台跳下摔死，共享血量全队跟着死）
+  // 限制高处落水路径，避免预测落点偏差导致坠落伤害。
   moves.infiniteLiquidDropdownDistance = false
   moves.maxDropDown = 3
   // 寻路自带的跑酷不看沟下面是什么，岩浆上也跳：把沟下危险（岩浆、深坑）的跳法过滤掉
@@ -256,7 +256,7 @@ function floatInWater(moves) {
       return !(cell.liquid && (head.liquid || head.physical))
     })
     // 水里挖和放都要踩稳，浮着永远等不到（实测：浅水竹子边上下漂到超时）。
-    // 脚下是实心地面就算踩稳：出生点旁 1x1 两格深的水坑，出路全要挖，一律禁掉后一步不动卡了 5 分钟（正式服拷贝实测）
+    // 脚下是实心地面就算踩稳，允许从狭窄水坑挖掘或垫高脱困。
     return here.liquid && !moves.getBlock(node, 0, -1, 0).physical ? open.filter((m) => !m.toBreak.length && !m.toPlace.length) : open
   }
 }
@@ -286,7 +286,7 @@ function behindIsSafe() {
   return [1, 2, 3].every((d) => !isDropAt(p.offset(Math.sin(yaw) * d, 0, Math.cos(yaw) * d).floored()))
 }
 
-// ---- 防坠落：寻路的"部分路径"会把机器人带到悬崖边，惯性就冲下去了（实测：从 30 格高台摔死，共享血量全队跟着死）----
+// ---- 防坠落：寻路的“部分路径”可能通向悬崖边，需要防止惯性导致坠落。----
 // 只看速度方向前方落点：下方 4 格以上全空且不是水就刹车。跑酷和鞘翅自己负责安全，不管。
 let lastBrake = 0
 let plannedPath = []
@@ -752,7 +752,7 @@ async function craftItem(name, count, depth) {
       await inventorySettled(600, 3000)
       station = table || findTable() || (depth < 3 ? await getTable(depth) : null)
       if (station) await travel(new goals.GoalNear(station.position.x, station.position.y, station.position.z, 2)).catch(() => {})
-      // 走不过去还去开工作台，会等 20 秒 windowOpen 超时，玩家只看到一句英文报错（正式服拷贝：水坑边做石镐）
+    // 先确认能靠近工作台，避免不可达时仍等待 windowOpen 超时。
       if (station && bot.entity.position.distanceTo(station.position.offset(0.5, 0.5, 0.5)) > 4.5) return `够不着工作台（${fmt(station.position)}），走不过去`
       ready = bot.recipesFor(item.id, null, 1, station)[0]
       if (!ready) return '背包同步后材料不够了'
@@ -872,7 +872,7 @@ async function autoEat(force = false) {
   }
 }
 // 战斗中不吃：换手会放下武器，挨打还会打断进食（实测：吃东西超时，之后拿着牛肉打怪被打死）。血少了战斗循环会先撤退再吃。
-// 撤退/逃跑也算战斗：正式服拷贝上夜里守点，被僵尸追着吃东西超时后被打死
+// 撤退/逃跑也算战斗，避免被追击时换手进食而中断防御。
 bot.on('health', () => { if (!combat.active()) autoEat(bot.health < 14) })
 
 // ---- 自卫（combat.js）：苦力怕、骷髅有专门打法；打完恢复跟随/站岗 ----
@@ -1318,7 +1318,7 @@ autoTravel = createAutoTravel(bot, {
   arrived: (target, range) => {
     const goal = new goals.GoalNear(target.x, target.y, target.z, range)
     const p = bot.entity.position, cx = Math.floor(target.x) + 0.5, cz = Math.floor(target.z) + 0.5
-    // 玩家给的 y 常差一格（站在水面、半砖、草径上）：水平到了、高差 1.5 格内也算到（正式服拷贝实测：差 1 格报"未到目标"）
+    // 玩家给的 y 常差一格（站在水面、半砖、草径上）：水平到了、高差 1.5 格内也算到。
     return goal.isEnd(p.floored()) || p.distanceTo(new Vec3(cx, Math.floor(target.y), cz)) <= range + 0.5 ||
       (Math.hypot(p.x - cx, p.z - cz) <= range + 0.5 && Math.abs(p.y - Math.floor(target.y)) <= 1.5)
   },
@@ -2054,8 +2054,8 @@ async function shutdown() {
 }
 process.on('SIGINT', () => { shutdown().catch((err) => console.log('[shutdown]', err.message)) })
 process.on('SIGTERM', () => { shutdown().catch((err) => console.log('[shutdown]', err.message)) })
-// 常驻时由 launchd 负责重启：连不上或 60 秒内没进服就退出，等下次重试。
-// 服务器关着时 launchd 每 30 秒拉起一次，线上停服一晚刷了七十多轮；没进过服就按连续失败次数多等一会再退出（最多 5 分钟）。
+// 连不上或 60 秒内没进服就退出，外部进程管理器可负责重启。
+// 没进过服时按连续失败次数退避后再退出（最多 5 分钟），避免频繁重试。
 const RETRY_FILE = path.join(__dirname, 'data', 'reconnect.json')
 let spawned = false
 const saveFailures = (failures) => { try { writeJSON(RETRY_FILE, { failures }) } catch (err) { console.log('[reconnect]', err.message) } }

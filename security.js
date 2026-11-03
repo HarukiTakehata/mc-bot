@@ -30,7 +30,7 @@ function safeChatChunks(value) {
     const capacity = Math.min(180, remaining) - prefix.length
     if (capacity <= 0) break
     let end = Math.min(offset + capacity, source.length)
-    // 优先在分隔符后断开：背包列表曾被切成 "netherite_chestplatex" 和 "1" 两条（正式服实测）
+    // 优先在分隔符后断开，避免把物品名和数量切成两条消息。
     if (end < source.length) {
       const window = source.slice(offset, end)
       const cut = Math.max(...[', ', '，', '；', '; ', '。', ' '].map((sep) => { const i = window.lastIndexOf(sep); return i < 0 ? -1 : i + sep.length }))

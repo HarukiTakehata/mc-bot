@@ -1,6 +1,6 @@
 # Minecraft 合作生存机器人
 
-基于 Mineflayer 的合作生存机器人。原版、Paper/Spigot、Fabric、Forge、NeoForge 服务器都能进，不指定版本时自动检测服务器版本。AI 后端可选 DeepSeek、任意 OpenAI 兼容接口（含本机 Ollama）或 Claude，也可以交给外部 agent（本机 HTTP 接口 / MCP）。能自己写工作流和模组扩展。需要 Node.js 22.17 或更高版本；当前主机验证版本为 24.22.1。
+基于 Mineflayer 的合作生存机器人。支持原版、Paper/Spigot、Fabric、Forge、NeoForge 服务器，不指定版本时自动检测服务器版本。AI 后端可选 DeepSeek、任意 OpenAI 兼容接口（含本机 Ollama）或 Claude，也可以交给外部 agent（本机 HTTP 接口 / MCP）。能自己写工作流和模组扩展。需要 Node.js 22.17 或更高版本。
 
 扩展和接入的完整写法见 [docs/extending.md](docs/extending.md)。
 
@@ -12,10 +12,10 @@ cp .env.example .env
 # 在 .env 填写 AI 密钥（见 .env.example）；不填则只启用固定指令。
 npm run check
 npm test
-MC_HOST=127.0.0.1 npm start
+npm start
 ```
 
-现有 launchd 服务仍通过 `start.sh` 启动。命令行和 launchd 环境优先于 `.env`；配置由 Node 解析，不作为 shell 代码执行。认证方式保持 `offline`，服务器准入和账号权限由服务器管理。
+在 `.env` 或 `config.json` 中设置目标服务器地址与端口，默认连接 `127.0.0.1:25565`。`npm start` 可在 Windows、macOS 和 Linux 上运行；类 Unix 系统也可用 `./start.sh` 启动。进程环境变量优先于 `.env`；配置由 Node 解析，不作为 shell 代码执行。机器人使用 `offline` 认证，服务器准入和账号权限由服务器管理。
 
 ## 游戏中使用
 
@@ -32,7 +32,7 @@ MC_HOST=127.0.0.1 npm start
 | 服务器 | 版本 | 结果 |
 |---|---|---|
 | 原版 | 26.1.2 | 12/12 |
-| Fabric（正式服拷贝，70 个模组） | 26.1.2 | 12/12（模组物品组件认识 15 个） |
+| Fabric | 26.1.2 | 12/12 |
 | Paper | 26.1.2 | 12/12 |
 | Forge 64.1.5 | 26.1.2 | 12/12 |
 | NeoForge | 26.1.2 | 12/12 |
@@ -57,9 +57,9 @@ MC_HOST=127.0.0.1 npm start
 - **Agent API / MCP**：设了 `MC_AGENT_PORT` 和 `MC_AGENT_TOKEN` 就会开本机接口。`npm run mcp` 启动 MCP 服务器，Claude Code、Cursor 等客户端可以直接操控机器人。
 - **工作流**：`workflows/*.json` 把一串指令编排成一件事，用 `bot run <id>` 运行、`bot workflows` 列出。可以开放给 AI 调用，也可以按天黑、空闲、定时等条件自动触发。
 - **模组扩展**：内置的在 `mods/`，自己写的放 `extensions/`。`.json` 只有数据（组件编码、知识、AI 提示、服务器规则）；`.js` 能注册指令和事件。扩展按服务器注册表里出现的命名空间自动启用，纯服务端模组用 `MC_MODS` 点名。
-- **打招呼特效**：用 `MC_RCON_PASSWORD` 直连 RCON，或者用 `MC_CTL` 指定控制台脚本；都不配时用 `/msg`。
+- **打招呼特效**：用 `MC_RCON_PASSWORD` 连接服务器的标准 RCON 接口；未配置或不可用时用 `/msg`。可用 `MC_SERVER_NAME` 设置欢迎语中的服务器名，默认不显示服务器名。
 
-以前写死的本服设置现在都要显式配置：共享背包和血量用 `MC_MODS=shared-world`，控制台脚本用 `MC_CTL`，欢迎语里的服务器名用 `MC_SERVER_NAME`。
+共享背包与共享血量规则由可选的 `shared-world` 扩展提供，默认关闭；仅在目标服务器确实启用这些规则时设置 `MC_MODS=shared-world`。
 
 ## 自动赶路（1.6.0）
 
@@ -78,7 +78,7 @@ AI收到的是实际交通结果：选择原因、降级原因、交通方式、
 
 数量必须为 1–64 的整数，狩猎最多 8 只；省略 `drop/deposit/withdraw` 数量表示全部。支持 `minecraft:stone` 自动规范成 `stone`，其他模组 namespace 保留，但不能因此推断未知模组配方或容器已受支持。地点最多 64 个，名称为 1–32 个中文、字母、数字、下划线或短横线；同名可更新。
 
-普通任务最长 3 分钟，烧炼最长 12 分钟。AI 全局最多每分钟 6 次、每小时 120 次请求，失败和取消也计入额度；这些是单个进程的请求上限，重启会重置计数。每位玩家独立保留最多 10 条历史，最多 32 个会话；长期笔记仍是共享记忆。玩家聊天、地点、库存、附近环境及共享笔记会发送至 DeepSeek。自主模式默认关闭，使用 `bot auto on` 显式启用。
+普通任务最长 3 分钟，烧炼最长 12 分钟。AI 默认全局最多每分钟 6 次、每小时 120 次请求，可用 `AI_RPM`、`AI_RPH` 调整；失败和取消也计入额度。这些是单个进程的请求上限，重启会重置计数。每位玩家独立保留最多 10 条历史，最多 32 个会话；长期笔记仍是共享记忆。启用 AI 后，玩家聊天、地点、库存、附近环境及共享笔记会发送至所配置的 AI 后端。自主模式默认关闭，使用 `bot auto on` 显式启用。
 
 聊天输出始终按纯文本处理，斜杠会被转义为可见文本。AI 只能执行固定动作，不能生成或执行 JavaScript；丢弃共享物品必须由玩家直接使用 `bot drop <物品> [数量]`，AI 不会自行丢弃。
 
@@ -107,9 +107,9 @@ AI收到的是实际交通结果：选择原因、降级原因、交通方式、
 
 ## 实机测试
 
-`scripts/lab/prod-copy.js` 用正式服备份起的实验服（`LAB_CONTAINER` 指定容器）跑真实地形场景：耕地/土径/浅水垫高、私聊回复、背包满挖矿、夜里守点、从真实落脚点鞘翅远行（300/1500 格、雷雨、烟花不够）、下界寻路、断服退避。起实验服时要先移走 QueQiao 等会对外发消息的模组。
+`scripts/lab/` 提供连接隔离本机测试服的场景脚本，通过 RCON 读取服务器状态。运行前显式设置 `LAB_CONTAINER`；端口、版本与输出目录等参数见 [实机测试配置](scripts/lab/README.md)。脚本会修改测试世界，请使用可丢弃的隔离环境。
 
-`scripts/lab/` 是连接隔离实验服（容器 `luomo-mcbot-cap-lab-20261030`，端口 25577）的场景脚本，判定走 RCON 读服务器真实状态。`existing-features.js` 回归已有功能，`new-capabilities.js` 测建筑红石跑酷，`complex.js` 测组合场景和 AI 指令链路（用 `fake-deepseek.js` 回放固定响应，不代表模型决策质量）。
+`existing-features.js` 回归已有功能，`new-capabilities.js` 测建筑红石跑酷，`complex.js` 测组合场景和 AI 指令链路（用 `fake-deepseek.js` 回放固定响应，不代表模型决策质量）。
 
 ## 兼容性探测
 
@@ -117,7 +117,7 @@ AI收到的是实际交通结果：选择原因、降级原因、交通方式、
 MC_HOST=127.0.0.1 MC_PORT=25565 npm run probe:registry
 ```
 
-探测仅进行 Fabric 配置握手，拿到注册表后断开，不进入游戏。测试包含真实 26.1 模组服的 116,879 字节注册表样本及 SHA-256，另覆盖截断、计数放大、畸形 AI、聊天命令边界、取消竞态和持久化失败。替身测试不能证明真实采矿、合成、战斗等完整游戏行为，实机覆盖见“实机测试”。
+探测仅进行 Fabric 配置握手，拿到注册表后断开，不进入游戏。离线测试使用由公开原版数据和示例模组条目生成的注册表样本，校验 SHA-256、解析顺序、扩展启用及未知组件处理；另覆盖截断、计数放大、畸形 AI、聊天命令边界、取消竞态和持久化失败。样本生成器为 `test/fixtures/generate-fabric.js`，不包含服务器抓包。替身测试不能证明真实采矿、合成、战斗等完整游戏行为，实机覆盖见“实机测试”。
 
 ## 鞘翅赶路（1.2.0）
 
@@ -184,7 +184,7 @@ bot stop
 
 **AI 智能体**：AI 可返回 `plan`（3–8 步计划）和 `check`（完成时本地核对的物品数量）。每个动作单独记录结果，一个失败就停下后续动作交给 AI 重新规划；反馈里带背包变化。长期目标（`bot goal`）每轮带上计划、最近进展、反复失败的动作和状况变化（死亡、卡住、超时、核对失败），死亡/卡住/超时不再终止目标；目标存盘在 data/goal.json，重启后 2 小时内会接着做；AI 额度用完时等待而不是放弃。直接指令失败时 AI 以最多 8 轮的小目标接手。
 
-**知识**：knowledge.js 收录原版生存技巧（矿物高度、工具、怪物、农业、下界等）和本服模组（精致存储、传送石碑、Lootr、Carry On、FTB Ultimine 等）用法，按关键词挑 4 条放进 AI 提示。
+**知识**：`knowledge.js` 收录原版生存技巧（矿物高度、工具、怪物、农业、下界等）；模组用法由启用的扩展提供，内置支持精致存储、传送石碑、Lootr、Carry On、FTB Ultimine 等。按关键词挑选相关内容放进 AI 提示。
 
 **配合玩家**：私聊不用加 bot 前缀；聊天里叫到机器人名字/"机器人"会回应；忙时新指令排队（最多 3 条）；超过 40 秒的活结束后点名告诉下指令的人；缺材料会请玩家帮忙；跟随对象和 12 格内的队友被怪贴身时会去帮忙；AI 能看到附近玩家的方向、距离和手持物品。
 
@@ -193,14 +193,12 @@ bot stop
 ## 上游参考与已知限制
 
 - [Mindcraft](https://github.com/mindcraft-bots/mindcraft/blob/develop/README.md)：借鉴固定 actions、长期目标和本地 modes 的组织方式，保留本项目的 Fabric 适配。
-- [Mindcraft CE 配置](https://github.com/mindcraft-ce/mindcraft-ce/blob/develop/settings.js)：参考 blocked_actions、only_chat_with 和默认禁用不安全代码的边界；本项目按用户要求保留全员控制。
+- [Mindcraft CE 配置](https://github.com/mindcraft-ce/mindcraft-ce/blob/develop/settings.js)：参考 blocked_actions、only_chat_with 和默认禁用不安全代码的边界；本项目采用全员控制的合作玩法。
 - [Mineflayer Pathfinder](https://github.com/PrismarineJS/mineflayer-pathfinder/blob/master/readme.md)：使用官方移动约束与停止接口，安全导航禁挖掘、禁搭方块、禁跑酷，保留工作模式。
 
-2026-10-29 的 `npm audit` 显示 11 个 moderate 传递关联项，均来自 [uuid 的缓冲区检查公告](https://github.com/advisories/GHSA-w5hq-g745-h8pq)，没有 high/critical。本次没有强制跨主版本覆盖或降级 Mineflayer 依赖；当前离线登录不代表全部依赖漏洞已被消除。共享血量/背包情况下，请在测试服确认复杂生存行为后再使用长目标。
+依赖安全状态随版本和公告变化，请使用 `npm audit` 检查当前依赖；离线登录不代表依赖漏洞已被消除。启用共享血量或共享背包规则时，请先在测试服确认复杂生存行为，再使用长目标。
 
-## 正式服实测修正（1.8.2）
-
-在正式服做了只读轻测，在正式服备份起的实验服上跑了全部场景，修了这些：
+## 行为修正（1.8.2）
 
 - 聊天：私聊来的查询指令（pos、inv、status…）私聊回，不再公屏广播；长列表在逗号后分段，不把 `netherite_chestplatex1` 拆成两条；`status` 的 AI 额度改成人话。
 - 下界：有防火效果时只躲岩浆本身；赶路途中踩过岩浆块不打断寻路（以前反复“跑开”把目标顶掉，整趟放弃）。
@@ -211,8 +209,8 @@ bot stop
 
 ## 稳定性修正（1.8.1）
 
-- 日志：`start.sh` 预加载 `log-time.js`，`logs/bot.log` 每行带本地时间；连不上服务器只记一行原因，不再打整段堆栈和 physicTick 弃用警告。
-- 断线重连：没进过服就按连续失败次数退避（15、30、60…最多 300 秒）再退出交给 launchd，计数在 `data/reconnect.json`，进服后清零。
+- 日志：启动时预加载 `log-time.js`，输出带本地时间；连不上服务器只记一行原因，不再打整段堆栈和 physicTick 弃用警告。
+- 断线重连：没进过服就按连续失败次数退避（15、30、60…最多 300 秒）再退出，外部进程管理器可负责重启；计数在 `data/reconnect.json`，进服后清零。
 - 垫高：站在耕地、土径这类不满一格的方块上也能 `pillar`（以前把方块放进耕地本身那格，被服务器拒绝）。
 - AI：只写 `cmd` 的无参动作自动补 `args: []`，仍走同一套校验；提示里写明 `pillar` 最多 32 格，少一轮返工。
 

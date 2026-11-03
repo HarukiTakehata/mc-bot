@@ -1,11 +1,12 @@
-// 固定连接本聊天创建的独立空世界；从代码副本运行，隔离所有data和AI历史。
+// 连接显式指定的本机隔离空世界；从代码副本运行，隔离 data 和 AI 历史。
+const config = require('./lab/config').loadLabConfig()
 const mineflayer = require('mineflayer')
 const fs = require('node:fs')
 const path = require('node:path')
 const { spawn, spawnSync } = require('node:child_process')
-const ROOT = path.resolve(__dirname, '..')
-const OUT = process.env.LAB_OUT || path.join(ROOT, 'logs', 'auto-travel-live')
-const LAB = 'luomo-mcbot-elytra-lab-20261030', NAME = 'AutoLabBot', OWNER = 'AutoLabOwner'
+const ROOT = config.root
+const OUT = process.env.LAB_OUT || path.join(config.outputDir, 'auto-travel-live')
+const NAME = 'AutoLabBot', OWNER = 'AutoLabOwner'
 const real = process.argv.includes('--real-ai')
 const selected = process.argv.filter((s) => s.startsWith('--case=')).map((s) => s.slice(7))
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -26,7 +27,7 @@ fs.writeFileSync(path.join(sandbox, 'data/places.json'), JSON.stringify({ 营地
 const trace = path.join(OUT, `ai-travel-${real ? 'real' : 'fake'}-${Date.now()}.jsonl`)
 if (real) process.loadEnvFile(path.join(ROOT, '.env'))
 function rcon(command) {
-  const r = spawnSync('docker', ['exec', LAB, 'rcon-cli', '--config', '/data/.rcon-cli.yaml', command], { encoding: 'utf8', timeout: 20_000 })
+  const r = spawnSync('docker', config.rconArgs(command), { encoding: 'utf8', timeout: 20_000 })
   if (r.status !== 0) throw new Error('隔离实验RCON不可用')
   const text = r.stdout.trim(); report.commands.push({ command, text })
   if (/Incorrect argument|Unknown or incomplete command|Expected .*<--\[HERE\]|Too many blocks|not loaded|Cannot place blocks/i.test(text)) throw new Error(text)
@@ -47,19 +48,19 @@ async function until(fn, ms = 30_000) {
   while (!fn()) { if (Date.now() > deadline) throw new Error('实验等待超时'); if (child && child.exitCode !== null) throw new Error('实验机器人退出'); await sleep(150) }
 }
 async function start() {
-  if (!/0 of a max/.test(rcon('list'))) throw new Error('本聊天隔离世界有其他玩家，拒绝重置')
+  if (!/0 of a max/.test(rcon('list'))) throw new Error('隔离测试世界有其他玩家，拒绝重置')
   rcon('forceload remove all'); rcon('forceload add -64 -32 447 63'); await sleep(2500)
   for (let n = 0; n < 8; n++) rcon(`fill ${-64 + n * 64} 63 -32 ${-1 + n * 64} 63 63 minecraft:stone`)
   rcon('time set day'); rcon('weather clear')
-  if (real && !process.env.DEEPSEEK_API_KEY) throw new Error('未配置已有DeepSeek密钥')
+  if (real && !process.env.DEEPSEEK_API_KEY) throw new Error('未配置 DeepSeek 测试密钥')
   child = spawn(process.execPath, ['--max-old-space-size=256', '--require', path.join(sandbox, 'scripts/lab/auto-travel-ai.js'), path.join(sandbox, 'bot.js')], {
-    cwd: sandbox, env: { ...process.env, MC_HOST: '127.0.0.1', MC_PORT: '25576', MC_VERSION: '26.1', MC_VIEW: 'normal', MC_NAME: NAME,
+    cwd: sandbox, env: { ...process.env, MC_HOST: config.host, MC_PORT: String(config.port), MC_VERSION: config.version, MC_VIEW: 'normal', MC_NAME: NAME,
       DEEPSEEK_API_KEY: real ? process.env.DEEPSEEK_API_KEY : 'isolated-placeholder', LAB_TRAVEL_AI_MODE: real ? 'real' : 'fake', LAB_TRAVEL_AI_TRACE: trace },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
   child.stdout.on('data', (s) => { report.log += String(s) }); child.stderr.on('data', (s) => { report.log += String(s) })
   await until(() => report.log.includes('[spawn]'))
-  owner = mineflayer.createBot({ host: '127.0.0.1', port: 25576, username: OWNER, version: '26.1', auth: 'offline' })
+  owner = mineflayer.createBot({ host: config.host, port: config.port, username: OWNER, version: config.version, auth: 'offline' })
   owner.on('chat', (user, text) => { if (user === NAME) report.messages.push({ at: Date.now(), text }) })
   owner.on('error', (err) => { report.ownerError = err.message })
   let timer

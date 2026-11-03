@@ -1,6 +1,6 @@
 # 上游比较与本轮采用范围
 
-2026-10-30。先比较现有功能和源码，再做项目适配；README声明不视为26.1或当前模组服的实测证据。
+先比较现有功能和源码，再做项目适配；README 声明不视为特定版本或服务器环境的实测证据。
 
 | 项目与固定源码 | 本轮采用 | 未迁入及理由 |
 |---|---|---|
@@ -18,7 +18,7 @@
 
 | 项目 | 采用 | 未采用及理由 |
 |---|---|---|
-| [AltoClef](https://github.com/gaucho-matrero/altoclef) `@get` | 物品获取规划（挖/烧/合成递归、缺工具先做工具），在 planner.js 用虚拟背包推演、回溯配方 | 不迁 Java 任务链；不做 `give`（共享背包无意义）、不拆非天然方块 |
+| [AltoClef](https://github.com/gaucho-matrero/altoclef) `@get` | 物品获取规划（挖/烧/合成递归、缺工具先做工具），在 planner.js 用虚拟背包推演、回溯配方 | 不迁 Java 任务链；不做 `give`、不拆非天然方块 |
 | [Baritone](https://github.com/cabaletta/baritone) farm / tunnel / explore | 收割补种、1x2 隧道、探索的行为定义 | 不引入第二套寻路；隧道遇液体/悬空直接停 |
 | [Mindcraft](https://github.com/mindcraft-bots/mindcraft) actions / modes | digDown 的停止条件、placeHere、useOn（剪毛/挤奶/喂食）、self_preservation 的掉落方块躲避 | 不默认开 torch_placing/hunting（消耗共享资源）；searchWiki 因中文 wiki 有反机器人验证不接入 |
 | [Voyager](https://github.com/MineDojo/Voyager) exploreUntil / critic | 探索直到看见目标；动作后背包变化反馈、check 本地核对 | 不迁动态代码生成 |
@@ -29,7 +29,7 @@
 
 | 项目 | 采用 | 未采用及理由 |
 |---|---|---|
-| [mineflayer-builder](https://github.com/PrismarineJS/mineflayer-builder)（MIT）、[mineflayer-schem](https://unpkg.com/mineflayer-schem@1.5.2/README.md)（MIT） | 按朝向/点击面放方块的思路、失败重试、进度汇报、`.schem` 输入 | 未安装：前者标注开发中；后者未在 26.1 验证，且自动拿箱子物品不符合共享背包边界。朝向表在本服实测（观察者和活塞相反） |
+| [mineflayer-builder](https://github.com/PrismarineJS/mineflayer-builder)（MIT）、[mineflayer-schem](https://unpkg.com/mineflayer-schem@1.5.2/README.md)（MIT） | 按朝向/点击面放方块的思路、失败重试、进度汇报、`.schem` 输入 | 未安装：前者标注开发中；后者未在 26.1 验证，且自动拿箱子物品会消耗玩家资源。朝向表区分观察者与活塞的相反方向 |
 | [Azalea parkour](https://docs.rs/crate/azalea/latest/source/src/pathfinder/moves/parkour.rs) | 1~3 格沟与上下跳的移动表、净空检查、滞空调整思路，在 parkour.js 重写 | Rust 实现不可直接用；没有复制代码 |
 | [mineflayer-pathfinder physics](https://github.com/PrismarineJS/mineflayer-pathfinder/blob/master/lib/physics.js)（MIT） | 用 prismarine-physics 预演起跳 | 自带跑酷移动不查沟下危险，已加过滤；不替换寻路 |
 | [@nxg-org/mineflayer-pathfinder](https://npmjs.com/package/@nxg-org/mineflayer-pathfinder) | 比较 | 作者标注开发中且不建议生产使用，未安装 |

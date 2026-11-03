@@ -12,7 +12,7 @@ function kit(lab, rockets = 128) {
 }
 async function surface(lab, x, z) {
   await lab.feed()
-  rcon(`gamemode creative ${TESTER}`) // 先切创造再送上天：生存模式摔死会经共享血量连带机器人（实测第一个场景总是莫名死亡）
+  rcon(`gamemode creative ${TESTER}`) // 先切创造再传送，避免测试员摔伤经共享血量同步给机器人。
   rcon(`forceload remove all`)
   rcon(`forceload add ${x - 32} ${z - 32} ${x + 32} ${z + 32}`)
   await sleep(4000)
@@ -84,7 +84,7 @@ const scenarios = {
     return finish(lab, await trip(lab, `bot fly ${to.x} ${to.z}`, 180_000), to)
   },
   async '落水_大水面离岸很远_游上岸再飞'(lab) {
-    // 平台不能太大：fill 上限 32768 格，超了静默不生效，机器人会从半空摔死（实测）
+    // 分批填充，避免超过测试服的 fill 单次方块数量限制。
     const a = await lab.arena(29000, 0, 30); kit(lab)
     rcon(`forceload add ${a.cx - 96} ${a.cz - 96} ${a.cx + 96} ${a.cz + 96}`)
     await sleep(2000)

@@ -7,7 +7,7 @@
     "node": ">=22.17"
   },
   "scripts": {
-    "start": "./start.sh",
+    "start": "node --env-file-if-exists=.env --max-old-space-size=256 --require ./log-time.js bot.js",
     "check": "node scripts/check.js",
     "probe:registry": "node scripts/probe-registry.js",
     "test": "node --test test/*.test.js",

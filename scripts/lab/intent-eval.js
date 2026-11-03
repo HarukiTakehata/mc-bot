@@ -1,13 +1,14 @@
-// 真实模型的理解力评测：不进游戏，把真实玩家说过的话和场景喂给模型，只检查它选的动作和清单。
+// 模型理解力评测：不进游戏，使用合成的玩家消息和场景，只检查模型选择的动作和清单。
 // 用法：DEEPSEEK_API_KEY=... node scripts/lab/intent-eval.js [--model=x] [--off]（--off 关思考，用来对比）
 const { createAI } = require('../../ai')
-const STATE = '位置 100 70 200；血量 20/20 饱食 20/20；白天；说话的玩家 luomo 在 110 70 205，正看着 oak_log@112,72,205；附近方块: oak_logx12, dirt多；记住的地点: 家(0,64,0)；背包: iron_pickaxex1, cobblestonex32'
+const PLAYER = 'TestPlayer'
+const STATE = `位置 100 70 200；血量 20/20 饱食 20/20；白天；说话的玩家 ${PLAYER} 在 110 70 205，正看着 oak_log@112,72,205；附近方块: oak_logx12, dirt多；记住的地点: 家(0,64,0)；背包: iron_pickaxex1, cobblestonex32`
 const cmds = (r) => r.actions.map((a) => a.cmd)
 const CASES = [
-  ['条件挖掘', '把附近高于76格的土和草方块全部挖掉', '', (r) => cmds(r).includes('excavate') && !cmds(r).includes('find')],
-  ['承接上文', '挖掉所有符合条件的方块', '把附近高于76格的土和草方块全部挖掉', (r) => cmds(r).includes('excavate') && r.actions.some((a) => a.args.some((x) => /above=76/.test(x)))],
-  ['坐标不全要问', '来209', '', (r) => !r.actions.length && /[?？]|哪|坐标/.test(r.reply)],
-  ['一个数飞行要问', '飞到3019', '', (r) => !r.actions.length],
+  ['条件挖掘', '把附近高于80格的土和草方块全部挖掉', '', (r) => cmds(r).includes('excavate') && !cmds(r).includes('find')],
+  ['承接上文', '挖掉所有符合条件的方块', '把附近高于80格的土和草方块全部挖掉', (r) => cmds(r).includes('excavate') && r.actions.some((a) => a.args.some((x) => /above=80/.test(x)))],
+  ['坐标不全要问', '来123', '', (r) => !r.actions.length && /[?？]|哪|坐标/.test(r.reply)],
+  ['一个数飞行要问', '飞到1200', '', (r) => !r.actions.length],
   ['生物掉落', '帮我收集一些粘液球', '', (r) => cmds(r).some((c) => ['explore', 'hunt'].includes(c)) && !cmds(r).includes('digdown')],
   ['挂机', '别跟着我了在这挂机', '', (r) => cmds(r).includes('stay')],
   ['回来', '回来', '', (r) => cmds(r).includes('come')],
@@ -30,11 +31,11 @@ async function main() {
   const model = process.argv.find((a) => a.startsWith('--model='))?.slice(8)
   let pass = 0
   for (const [name, text, prior, ok, extra] of CASES) {
-    const ai = createAI({ apiKey: key, model, thinking: !process.argv.includes('--off'), getName: () => 'Claude_Bot', now: (() => { let t = 0; return () => (t += 61_000) })() })
+    const ai = createAI({ apiKey: key, model, thinking: !process.argv.includes('--off'), getName: () => 'MinecraftBot', now: (() => { let t = 0; return () => (t += 61_000) })() })
     const start = Date.now()
     try {
-      if (prior) await ai.ask('luomo', prior, STATE)
-      const r = await ai.ask('luomo', text, extra ? `${STATE}；${extra}` : STATE)
+      if (prior) await ai.ask(PLAYER, prior, STATE)
+      const r = await ai.ask(PLAYER, text, extra ? `${STATE}；${extra}` : STATE)
       const good = ok(r)
       pass += good ? 1 : 0
       console.log(`${good ? 'PASS' : 'FAIL'} ${name} (${((Date.now() - start) / 1000).toFixed(0)}s): ${JSON.stringify({ u: r.understanding, reply: r.reply, a: r.actions, tasks: r.tasks?.map((t) => t.text), done: r.done })}`)

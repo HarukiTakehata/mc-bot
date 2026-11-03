@@ -1,4 +1,4 @@
-// 综合场景：把真实情况里会同时发生的事放在一起。用法：node scripts/lab/complex.js [场景名片段...]
+// 综合测试场景：组合建造、战斗、队友操作与模拟 AI。用法：node scripts/lab/complex.js [场景名片段...]
 const { createLab, rcon, assert, sleep, NAME, TESTER } = require('./harness')
 const BP = require('../../blueprint')
 const CRITICAL = ['facing', 'half', 'type', 'face', 'part', 'delay', 'mode', 'inverted']
@@ -13,7 +13,7 @@ const DONE = /盖好了/, FAILED = /没开工|没盖完|盖不了|失败/
 const scenarios = {
   async '综合_建造途中来怪_打完接着盖'(lab) {
     const a = await lab.arena(9000, 0, 24)
-    // Tester 是不会躲不会打的假人：共享血量下怪去咬它，机器人隔着 30 格一起死（服务器日志：Tester was slain by Zombie）。这里只测机器人自己
+    // 测试员不会自卫；共享血量模组可能把它的伤害同步给机器人，因此切换为创造模式。
     rcon(`gamemode creative ${TESTER}`)
     const o = { x: a.cx, y: 100, z: a.cz - 4 }
     const blocks = BP.place(BP.TEMPLATES.wall.build({ w: 10, h: 3, m: 'cobblestone' }), o, 'north')
@@ -123,8 +123,7 @@ const scenarios = {
   async '综合_开怪夜晚站岗一分钟'(lab) {
     const a = await lab.arena(9700, 0, 24)
     lab.give('minecraft:iron_sword', 1); lab.give('minecraft:shield', 1); lab.give('minecraft:cooked_beef', 16)
-    // 围墙：浮空平台的悬崖太不真实（第一版被苦力怕炸下平台）
-    // Tester 不会躲不会打，共享血量下它一死机器人就死（服务器日志：Tester was blown up by Creeper），所以设成怪不理的创造模式，只测机器人自己
+    // 用围墙限制怪物活动范围；测试员切换为创造模式，避免共享血量干扰机器人战斗判定。
     rcon(`gamemode creative ${TESTER}`)
     const w = (x1, z1, x2, z2) => rcon(`fill ${x1} 100 ${z1} ${x2} 104 ${z2} minecraft:stone`)
     w(a.cx - 24, a.cz - 24, a.cx + 24, a.cz - 24); w(a.cx - 24, a.cz + 24, a.cx + 24, a.cz + 24); w(a.cx - 24, a.cz - 24, a.cx - 24, a.cz + 24); w(a.cx + 24, a.cz - 24, a.cx + 24, a.cz + 24)

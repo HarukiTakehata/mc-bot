@@ -67,16 +67,10 @@ or inconsistent overrides, legacy-NBT-only representations and unknown versions
 are rejected. Version context is used for inventory counting, item selection
 and the final held-item check. This compatibility logic is local, not EAFE code.
 
-The coordinator verified the default against an independent local Fabric 26.1.2
-server on 2026-10-30 using the same unmodified stack. `data get entity FlyLabBot
-Inventory` reported a 32-count `minecraft:firework_rocket` stack without an
-explicit components field. The native predicate `execute if items entity
-FlyLabBot hotbar.* minecraft:firework_rocket[minecraft:fireworks={flight_duration:1,explosions:[]}]`
-passed with count 32; the corresponding predicate with `flight_duration:3`
-failed. Mineflayer represented that same stack as `components: []`, an empty
-`componentMap`, `removedComponents: []`, and `nbt: null`. This server result,
-together with the local Slot and `fromNotch` definitions, is the evidence for
-the narrowly versioned fallback above.
+The fallback is restricted to the versions named above and covered by the
+offline rocket validation tests. For other versions or modified item defaults,
+verify the native item predicate and Mineflayer's Slot representation in an
+isolated test environment before extending that fallback.
 
 ## Compared but not incorporated
 

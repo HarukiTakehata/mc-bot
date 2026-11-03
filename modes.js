@@ -5,7 +5,7 @@ const { goals } = require('mineflayer-pathfinder')
 const DESCRIPTIONS = {
   self_preservation: '自救：溺水上浮、离开岩浆和火',
   unstuck: '脱困：走路卡住 15 秒就晃一下重新走',
-  item_collecting: '捡物：空闲时捡 8 格内的掉落物（共享背包，默认关）',
+  item_collecting: '捡物：空闲时捡 8 格内的掉落物（默认关）',
   idle_staring: '看人：空闲时看着附近的玩家',
   elbow_room: '让位：空闲时给贴近的玩家让出小片安全空间（默认关）',
   sleep_with_players: '陪睡：有玩家上床时，空闲的我也找空床睡，帮大家跳过夜晚',

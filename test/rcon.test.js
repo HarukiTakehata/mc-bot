@@ -1,8 +1,9 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const net = require('node:net')
+const { EventEmitter } = require('node:events')
 const { rconRun, encode } = require('../rcon')
-const { consoleFrom, greetingCommands } = require('../greet')
+const { createGreeter, consoleFrom, greetingCommands } = require('../greet')
 
 // 假 RCON 服务器：记录收到的指令，密码不对回 -1
 function fakeServer(password) {
@@ -46,13 +47,37 @@ test('RCON：密码错、连不上、指令越界都明确失败', async () => {
 test('控制台选择：没配就只用 /msg；端口不合法直接报错', () => {
   assert.equal(consoleFrom({}), null)
   assert.equal(typeof consoleFrom({ MC_RCON_PASSWORD: 'x' }), 'function')
-  assert.equal(typeof consoleFrom({ MC_CTL: '/path/to/ctl.py' }), 'function')
   assert.throws(() => consoleFrom({ MC_RCON_PASSWORD: 'x', MC_RCON_PORT: '70000' }), /端口/)
+})
+
+test('欢迎特效使用配置的标准 RCON，只发送给目标玩家', async () => {
+  const { server, received, port } = await fakeServer('test-password')
+  const bot = Object.assign(new EventEmitter(), { username: 'MinecraftBot', players: { Steve: {}, MinecraftBot: {} } })
+  const messages = []
+  try {
+    const greeter = createGreeter(bot, { log() {}, chat: (text) => messages.push(text) }, {
+      MC_RCON_HOST: '127.0.0.1', MC_RCON_PORT: String(port), MC_RCON_PASSWORD: 'test-password', MC_SERVER_NAME: '示例服',
+    })
+    await greeter.greet('Steve')
+    assert.equal(received.length, 11)
+    assert.ok(received.every((command) => command.includes('Steve') && !command.includes('@a')))
+    assert.ok(received.some((command) => command.includes('示例')))
+    assert.deepEqual(messages, [])
+  } finally { server.close() }
+})
+
+test('未配置 RCON 时欢迎消息退回普通私聊', async () => {
+  const bot = Object.assign(new EventEmitter(), { username: 'MinecraftBot', players: { Steve: {} } })
+  const messages = []
+  const greeter = createGreeter(bot, { log() {}, chat: (text) => messages.push(text) }, {})
+  await greeter.greet('Steve')
+  assert.equal(messages.length, 1)
+  assert.match(messages[0], /^\/msg Steve .*欢迎回来/)
 })
 
 test('欢迎语不再写死服务器名；名字不合格就不写', () => {
   const plain = greetingCommands('Steve', 'Bot', { hour: 9 }).join('\n')
-  assert.ok(!plain.includes('Luomo') && plain.includes('欢迎回来'))
+  assert.ok(plain.includes('欢迎回来') && !plain.includes('欢迎回到'))
   assert.ok(greetingCommands('Steve', 'Bot', { serverName: '我的服' }).join('').includes('"我的"'))
   assert.ok(!greetingCommands('Steve', 'Bot', { serverName: '坏\n名字' }).join('').includes('坏'))
 })

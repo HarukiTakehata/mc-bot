@@ -1,5 +1,5 @@
 // 可选的 config.json：把常用设置写在一个文件里。规则：
-// - 环境变量优先（.env、launchd 里设的不会被文件覆盖）
+// - 环境变量优先（包括 .env 和进程管理器提供的变量，不会被文件覆盖）
 // - 只认下面列出的键，类型和范围不对直接报错，不猜
 // - 密钥（API key、RCON 密码、Agent 令牌）只能放 .env：文件里出现 key/password/token/secret 一类的键直接拒绝，免得被提交进 git
 const fs = require('node:fs')
@@ -35,8 +35,6 @@ const KEYS = {
   'greet.serverName': ['MC_SERVER_NAME', str(32)],
   'greet.rconHost': ['MC_RCON_HOST', str(253)],
   'greet.rconPort': ['MC_RCON_PORT', int(1, 65535)],
-  'greet.ctl': ['MC_CTL', str(500)],
-  'greet.world': ['MC_WORLD', str(32)],
 }
 const SECRET = /(key|password|passwd|token|secret)/i
 

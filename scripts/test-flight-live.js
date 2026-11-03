@@ -1,4 +1,5 @@
-// 仅用于本次创建的独立空世界，固定loopback端口/容器，绝不访问生产服。
+// 在显式指定的本机隔离空世界中搭建飞行跑道并验证飞行行为。
+const config = require('./lab/config').loadLabConfig()
 const mineflayer = require('mineflayer')
 const { spawnSync } = require('node:child_process')
 const fs = require('node:fs')
@@ -8,16 +9,15 @@ const { createRuntime, CancelledError } = require('../runtime')
 const { installProtocolCompat } = require('../protocol-compat')
 const { finishFlightRoute } = require('../flight-route')
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder')
-const LAB = 'luomo-mcbot-elytra-lab-20261030'
 const NAME = 'FlyLabBot'
 const mode = process.argv[2] || 'arrival'
 if (!['arrival', 'stop', 'reject', 'roundtrip'].includes(mode)) throw new Error('Expected arrival, stop, reject or roundtrip')
-const out = process.env.FLIGHT_TEST_OUTPUT || '/tmp/mcbot-flight-evidence'
+const out = process.env.FLIGHT_TEST_OUTPUT || path.join(config.outputDir, 'flight-live')
 fs.mkdirSync(out, { recursive: true, mode: 0o700 })
 const report = { case: mode, startedAt: new Date().toISOString(), traces: [], phases: [], commands: [] }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 function rcon(command) {
-  const result = spawnSync('docker', ['exec', LAB, 'rcon-cli', '--config', '/data/.rcon-cli.yaml', command], { encoding: 'utf8', timeout: 20_000 })
+  const result = spawnSync('docker', config.rconArgs(command), { encoding: 'utf8', timeout: 20_000 })
   if (result.status !== 0) throw new Error('Lab RCON failed: ' + (result.stderr || result.stdout))
   const output = result.stdout.trim()
   report.commands.push({ command, output })
@@ -34,7 +34,7 @@ async function run() {
     const output = rcon(command)
     if (/not loaded|too many|error|unknown/i.test(output)) throw new Error(output)
   }
-  bot = mineflayer.createBot({ host: '127.0.0.1', port: 25576, username: NAME, auth: 'offline', version: '26.1', viewDistance: 'normal' })
+  bot = mineflayer.createBot({ host: config.host, port: config.port, username: NAME, auth: 'offline', version: config.version, viewDistance: 'normal' })
   bot.loadPlugin(pathfinder)
   bot.on('error', (err) => { report.error = err.message })
   bot.on('kicked', (why) => { report.kicked = why; engine?.dispose('kicked') })

@@ -1,12 +1,11 @@
 {
-  "captured_at": "2026-10-29",
-  "timezone": "Asia/Singapore",
-  "source": "Configured local Minecraft Fabric server; configuration-only probe, disconnected before play",
+  "source": "Synthetic: public minecraft-data 26.1 registries with illustrative Waystones and Refined Storage entries; no server capture",
+  "generator": "test/fixtures/generate-fabric.js",
   "minecraft_version": "26.1",
-  "bytes": 116879,
-  "sha256": "da341d6c31d34d041b073a6f5c220b45ccbfa007682b3083f8bcdcfdbfd1f3e8",
-  "registry_count": 12,
-  "item_count": 1971,
-  "block_count": 1563,
-  "component_count": 134
+  "bytes": 45822,
+  "sha256": "d16332abf182a9b51ea3d34eb322c5841f28612271f492ff2458802103ba2105",
+  "registry_count": 3,
+  "item_count": 1508,
+  "block_count": 1170,
+  "component_count": 114
 }
