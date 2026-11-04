@@ -35,3 +35,8 @@ jobs:
       - name: Install locked dependencies without lifecycle scripts
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Check JavaScript syntax
+        run: npm run check
+      - name: Check nested JavaScript syntax
+        run: git ls-files -z 'scripts/lab/*.js' 'test/fixtures/*.js' 'extensions/**/*.js' | xargs -0 -r -n 1 node --check
+      - name: Run unit tests
+        run: npm test
