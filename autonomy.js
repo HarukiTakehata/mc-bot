@@ -76,12 +76,13 @@ function createDirector({ getState, run, tickMs = 5000, maxPerHour = 60, log = c
       result = { ok: false, error: err.message }
     } finally {
       running = false
-      stamps.push(started)
-      const ok = result?.ok !== false
+      const interrupted = !!(result?.interrupted || result?.preempted || result?.stopped)
+      const ok = !interrupted && result?.ok === true
+      if (!interrupted) stamps.push(started)
       if (ok) {
         strikes.delete(next.cmd)
         cooldowns.delete(next.cmd)
-      } else {
+      } else if (!interrupted) {
         const n = (strikes.get(next.cmd) || 0) + 1
         strikes.set(next.cmd, n)
         // 失败退避：30s、1m、2m… 最多 15 分钟，避免每 2 秒重试同一条并刷屏
@@ -89,8 +90,9 @@ function createDirector({ getState, run, tickMs = 5000, maxPerHour = 60, log = c
       }
       const line = JSON.stringify({
         action: next.cmd, args: next.args, why: next.why,
-        result: ok ? 'ok' : 'fail', ms: now() - started,
-        ...(ok ? {} : { error: String(result?.error || '').slice(0, 120), strikes: strikes.get(next.cmd) || 0 }),
+        result: interrupted ? 'interrupted' : ok ? 'ok' : 'fail', ms: now() - started,
+        ...(interrupted ? { reason: result?.preempted ? 'preempted' : 'stopped' }
+          : ok ? {} : { error: String(result?.error || '动作未返回成功').slice(0, 120), strikes: strikes.get(next.cmd) || 0 }),
       })
       log(`[auto] ${line}`)
     }

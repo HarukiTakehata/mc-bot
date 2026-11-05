@@ -118,3 +118,33 @@ test('执行失败也记账，不无限重试同一条', async () => {
   assert.equal(calls, 1)
   assert.match(lines[0], /"result":"fail"/)
 })
+
+for (const reason of ['preempted', 'stopped']) {
+  test(`director 将 ${reason} 记录为中断，不计预算也不退避`, async () => {
+    const lines = []
+    let calls = 0
+    const d = createDirector({
+      getState: () => ({ ...base, inventory: {} }),
+      run: async () => ++calls === 1 ? { ok: false, [reason]: true } : { ok: true },
+      maxPerHour: 1, log: (line) => lines.push(line),
+    })
+    d.start()
+    await d.tick()
+    assert.deepEqual(d.budget(), { used: 0, max: 1, left: 1 })
+    assert.equal(JSON.parse(lines[0].replace('[auto] ', '')).result, 'interrupted')
+    assert.equal(JSON.parse(lines[0].replace('[auto] ', '')).reason, reason)
+    await d.tick()
+    d.stop()
+    assert.equal(calls, 2, '中断不触发失败冷却')
+    assert.equal(d.budget().used, 1)
+  })
+}
+
+test('director 不把未返回成功结果的动作记为成功', async () => {
+  const lines = []
+  const d = createDirector({ getState: () => ({ ...base, inventory: {} }), run: async () => undefined, log: (line) => lines.push(line) })
+  d.start()
+  await d.tick()
+  d.stop()
+  assert.equal(JSON.parse(lines[0].replace('[auto] ', '')).result, 'fail')
+})
